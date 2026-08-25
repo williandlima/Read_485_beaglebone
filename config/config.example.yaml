@@ -1,0 +1,33 @@
+# Copie este arquivo para config.yaml e ajuste conforme seu hardware.
+
+serial:
+  # Porta serial da UART usada na BeagleBone (ex.: UART1 = /dev/ttyO1,
+  # UART4 = /dev/ttyO4). Confira scripts/setup_uart.sh para habilitar
+  # a UART desejada via device tree overlay (config-pin).
+  port: /dev/ttyO4
+  baudrate: 9600
+  bytesize: 8
+  parity: N        # N, E ou O
+  stopbits: 1
+  timeout: 1.0      # segundos
+
+# Controle manual do pino DE/RE (deixe null se o transceptor/adaptador
+# ja fizer o controle automatico de direcao).
+direction_gpio:
+  enabled: false
+  pin: P9_12
+  active_high: true
+
+modbus:
+  slave_id: 1
+  # Tipo de leitura: holding | input | coils | discrete
+  register_type: holding
+  start_address: 0
+  count: 10
+  poll_interval: 1.0  # segundos entre leituras no modo continuo
+
+sniffer:
+  # Tempo de silencio (em "tempos de caractere" Modbus, ~3.5 chars)
+  # usado para separar quadros no barramento durante engenharia reversa.
+  inter_frame_silence_multiplier: 3.5
+  min_silence_seconds: 0.005
