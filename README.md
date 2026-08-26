@@ -118,3 +118,21 @@ modulo `curses` (ja vem no Python padrao).
 python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
 ```
 `Q` para sair.
+
+### Testar sem hardware (legacy_py34/simulate_bus.py)
+
+Gera trafego Modbus RTU valido (CRC correto) em uma porta serial, com um
+escravo estavel e outro que simula uma "chave" mudando de estado
+periodicamente — util para validar o destaque NOVO/MUDOU antes de ter o
+conversor RS-485 e o barramento real em maos.
+
+```bash
+# Terminal 1: cria um par de portas seriais virtuais
+socat -d -d pty,raw,echo=0,link=/tmp/ttyBUS_A pty,raw,echo=0,link=/tmp/ttyBUS_B
+
+# Terminal 2: gera trafego falso
+python3 legacy_py34/simulate_bus.py /tmp/ttyBUS_A --baudrate 9600
+
+# Terminal 3: monitora
+python3 legacy_py34/bus_monitor.py /tmp/ttyBUS_B --baudrate 9600
+```
