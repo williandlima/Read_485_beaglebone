@@ -97,3 +97,24 @@ scripts/
 examples/
   read_holding_registers.py  # exemplo minimo sem arquivo de config
 ```
+
+## Monitor visual do barramento (legacy_py34/bus_monitor.py)
+
+Interface em texto (curses, roda direto no terminal via SSH) que mostra
+quais dispositivos/comandos estao presentes no barramento e destaca em
+tempo real:
+
+- **NOVO** — combinacao (escravo, funcao) nunca vista antes
+- **MUDOU** — combinacao ja conhecida com um payload diferente do
+  anterior (ex.: uma chave/sensor mudou de estado e um novo comando
+  apareceu no barramento)
+
+Escrito em sintaxe compativel com Python 3.4+ (sem f-strings, sem
+dataclasses) porque BeagleBones com imagens antigas (Debian Jessie,
+Python 3.4) nao rodam o codigo em `src/`. So depende de `pyserial` e do
+modulo `curses` (ja vem no Python padrao).
+
+```bash
+python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
+```
+`Q` para sair.
