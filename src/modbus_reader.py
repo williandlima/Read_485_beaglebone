@@ -7,6 +7,7 @@ veja `rs485_sniffer.py`.
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import sys
 import time
@@ -43,18 +44,30 @@ def build_client(serial_cfg: dict[str, Any]) -> ModbusSerialClient:
     )
 
 
+def _slave_kwarg_name(reader) -> str:
+    """pymodbus renomeou o parametro 'slave' para 'device_id' nas versoes
+    mais recentes da serie 3.x (removendo o antigo). Detecta qual nome a
+    versao instalada espera, para funcionar com qualquer uma delas.
+    """
+    params = inspect.signature(reader).parameters
+    if "device_id" in params:
+        return "device_id"
+    return "slave"
+
+
 def read_once(client: ModbusSerialClient, modbus_cfg: dict[str, Any]) -> Optional[list[int]]:
     reader_name = REGISTER_READERS.get(modbus_cfg.get("register_type", "holding"))
     if reader_name is None:
         raise ValueError(f"register_type invalido: {modbus_cfg.get('register_type')}")
 
     reader = getattr(client, reader_name)
+    kwargs = {
+        "address": modbus_cfg["start_address"],
+        "count": modbus_cfg["count"],
+        _slave_kwarg_name(reader): modbus_cfg["slave_id"],
+    }
     try:
-        response = reader(
-            address=modbus_cfg["start_address"],
-            count=modbus_cfg["count"],
-            slave=modbus_cfg["slave_id"],
-        )
+        response = reader(**kwargs)
     except ModbusException as exc:
         logger.error("Erro de comunicacao Modbus: %s", exc)
         return None

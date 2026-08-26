@@ -8,8 +8,13 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
 from pymodbus.client import ModbusSerialClient
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.modbus_reader import _slave_kwarg_name
 
 
 def main() -> None:
@@ -35,8 +40,9 @@ def main() -> None:
         raise SystemExit(f"Nao foi possivel abrir a porta {args.port}")
 
     try:
+        kwarg = _slave_kwarg_name(client.read_holding_registers)
         response = client.read_holding_registers(
-            address=args.address, count=args.count, slave=args.slave
+            address=args.address, count=args.count, **{kwarg: args.slave}
         )
         if response.isError():
             raise SystemExit(f"Erro Modbus: {response}")
