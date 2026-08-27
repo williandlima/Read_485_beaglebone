@@ -17,19 +17,19 @@ Mostra:
 
 Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
-    python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.csv
+    python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
     (Q para sair)
 
-Com --log, cada evento (quadro completo, valido ou nao) e gravado em um
-CSV conforme acontece, com timestamp, status (new/changed/vazio),
-escravo, funcao, payload e CRC - para consultar depois de fechar o
-monitor. Se o arquivo ja existir, os eventos novos sao anexados ao
-final (o cabecalho so e escrito uma vez).
+Com --log, so o que importa e gravado em texto simples, uma linha por
+evento: quando cada escravo/funcao apareceu pela primeira vez (define o
+"comando default" daquela combinacao) e, depois, toda vez que o
+payload mudar em relacao a esse default - mostrando lado a lado o
+default e o comando novo que apareceu. Repeticoes do mesmo valor nao
+sao gravadas. Se o arquivo ja existir, as linhas novas sao anexadas ao
+final.
 """
 import argparse
-import csv
 import curses
-import os
 import time
 from collections import deque
 
@@ -146,57 +146,28 @@ def update_registry(registry, registry_order, frame, now):
     return status
 
 
-LOG_HEADER = ['timestamp', 'status', 'slave_id', 'function_code',
-              'function_name', 'previous_payload_hex', 'payload_hex', 'diff',
-              'crc_ok', 'raw_hex']
-
-
 def open_log(path):
-    is_new = not (os.path.isfile(path) and os.path.getsize(path) > 0)
-    f = open(path, 'a', newline='')
-    writer = csv.writer(f)
-    if is_new:
-        writer.writerow(LOG_HEADER)
-        f.flush()
-    return f, writer
+    return open(path, 'a')
 
 
-def payload_diff(old, new):
-    """Descreve, byte a byte, o que mudou entre dois payloads.
-
-    Ex.: "byte2: c8->c9" - facilita ver exatamente o que a chave/sensor
-    alterou sem precisar comparar as linhas anteriores na mao.
-    """
-    if old is None or old == new:
-        return ''
-    diffs = []
-    for i in range(max(len(old), len(new))):
-        old_byte = old[i] if i < len(old) else None
-        new_byte = new[i] if i < len(new) else None
-        if old_byte != new_byte:
-            old_str = '%02x' % old_byte if old_byte is not None else '--'
-            new_str = '%02x' % new_byte if new_byte is not None else '--'
-            diffs.append('byte%d:%s->%s' % (i, old_str, new_str))
-    return ' '.join(diffs)
+def log_default(log_file, now, frame):
+    """Grava a linha que define o comando default de um escravo/funcao
+    (a primeira vez que ele aparece no barramento)."""
+    when = time.strftime('%H:%M:%S', time.localtime(now))
+    line = "%s  DEFAULT   Slave %d  %-24s  comando=%s\n" % (
+        when, frame['slave_id'], function_name(frame['function_code']),
+        hexlify_spaced(frame['payload']))
+    log_file.write(line)
+    log_file.flush()
 
 
-def log_event(log_file, log_writer, now, status, frame, previous_payload=None):
-    slave_id = frame.get('slave_id')
-    function_code = frame.get('function_code')
-    payload = frame.get('payload', b'')
-    row = [
-        time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
-        status if status else '',
-        slave_id if slave_id is not None else '',
-        ('0x%02X' % function_code) if function_code is not None else '',
-        function_name(function_code) if function_code is not None else '',
-        hexlify_spaced(previous_payload) if previous_payload is not None else '',
-        hexlify_spaced(payload),
-        payload_diff(previous_payload, payload),
-        'OK' if frame.get('crc_ok') else 'BAD',
-        hexlify_spaced(frame.get('raw', b'')),
-    ]
-    log_writer.writerow(row)
+def log_change(log_file, now, frame, default_payload):
+    """Grava a linha de uma mudanca: comando default vs comando novo."""
+    when = time.strftime('%H:%M:%S', time.localtime(now))
+    line = "%s  MUDOU     Slave %d  %-24s  default=%s  novo=%s\n" % (
+        when, frame['slave_id'], function_name(frame['function_code']),
+        hexlify_spaced(default_payload), hexlify_spaced(frame['payload']))
+    log_file.write(line)
     log_file.flush()
 
 
@@ -230,6 +201,7 @@ def run(stdscr, ser, silence, port_desc, log=None):
     registry = {}
     registry_order = []
     events = deque(maxlen=MAX_EVENTS)
+    defaults = {}
 
     buffer = bytearray()
     last_byte_time = None
@@ -249,20 +221,20 @@ def run(stdscr, ser, silence, port_desc, log=None):
             frame = parse_frame(bytes(buffer))
             if frame is not None:
                 key = (frame['slave_id'], frame['function_code'])
-                prev_entry = registry.get(key)
-                previous_payload = prev_entry['payload'] if prev_entry else None
                 status = update_registry(registry, registry_order, frame, now)
                 events.appendleft((now, status, frame))
+                if log is not None and frame['crc_ok']:
+                    if status == 'new':
+                        defaults[key] = frame['payload']
+                        log_default(log, now, frame)
+                    elif status == 'changed':
+                        log_change(log, now, frame, defaults.get(key, frame['payload']))
             else:
-                previous_payload = None
-                status = None
                 frame = {
                     'raw': bytes(buffer), 'slave_id': None,
                     'function_code': None, 'payload': b'', 'crc_ok': False,
                 }
-                events.appendleft((now, status, frame))
-            if log is not None:
-                log_event(log[0], log[1], now, status, frame, previous_payload)
+                events.appendleft((now, None, frame))
             buffer = bytearray()
             last_byte_time = None
 
@@ -351,8 +323,9 @@ def main():
     parser.add_argument('--parity', default='N', choices=['N', 'E', 'O'])
     parser.add_argument('--stopbits', type=int, default=1)
     parser.add_argument('--log', default=None,
-                         help="Caminho de um CSV onde cada evento e gravado "
-                              "conforme acontece (anexa se ja existir)")
+                         help="Caminho de um arquivo de texto onde e gravado "
+                              "o comando default de cada escravo/funcao e "
+                              "toda mudanca em relacao a ele (anexa se ja existir)")
     args = parser.parse_args()
 
     ser = serial.Serial(args.port, args.baudrate, parity=args.parity,
@@ -360,18 +333,14 @@ def main():
     silence = max(char_time_seconds(args.baudrate, 8, args.parity, args.stopbits) * 3.5, 0.005)
     port_desc = "%s @ %s bps" % (args.port, args.baudrate)
 
-    log_file = None
-    log = None
-    if args.log:
-        log_file, log_writer = open_log(args.log)
-        log = (log_file, log_writer)
+    log = open_log(args.log) if args.log else None
 
     try:
         curses.wrapper(run, ser, silence, port_desc, log)
     finally:
         ser.close()
-        if log_file is not None:
-            log_file.close()
+        if log is not None:
+            log.close()
 
 
 if __name__ == '__main__':

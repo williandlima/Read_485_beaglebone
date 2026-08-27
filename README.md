@@ -119,20 +119,24 @@ python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
 ```
 `Q` para sair.
 
-Para gravar cada evento (quadro completo, valido ou nao) em um CSV
-conforme acontece, use `--log`:
+Para guardar so o que importa — quando cada escravo/funcao apareceu
+pela primeira vez (o "comando default" daquela combinacao) e toda vez
+que um comando diferente aparecer depois — use `--log`:
 
 ```bash
-python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.csv
+python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
 ```
 
-Colunas: `timestamp, status (new/changed/vazio), slave_id, function_code,
-function_name, previous_payload_hex, payload_hex, diff, crc_ok,
-raw_hex`. A coluna `diff` mostra direto na linha o que mudou em relacao
-ao payload anterior da mesma combinacao (escravo, funcao) - ex.:
-`byte2:00->01` quando uma chave liga - sem precisar procurar a linha
-anterior pra comparar. Se o arquivo ja existir, os eventos novos sao
-anexados ao final (o cabecalho so e escrito uma vez).
+Texto simples, uma linha por evento (sem CRC, sem hex bruto, sem
+repeticoes do mesmo valor):
+
+```
+01:35:04  DEFAULT   Slave 2  Read Holding Registers    comando=02 00 00
+01:35:06  MUDOU     Slave 2  Read Holding Registers    default=02 00 00  novo=02 00 01
+01:35:09  MUDOU     Slave 2  Read Holding Registers    default=02 00 00  novo=02 00 00
+```
+
+Se o arquivo ja existir, as linhas novas sao anexadas ao final.
 
 ### Testar sem hardware (legacy_py34/simulate_bus.py)
 
