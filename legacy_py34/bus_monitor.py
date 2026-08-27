@@ -17,10 +17,19 @@ Mostra:
 
 Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
+    python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.csv
     (Q para sair)
+
+Com --log, cada evento (quadro completo, valido ou nao) e gravado em um
+CSV conforme acontece, com timestamp, status (new/changed/vazio),
+escravo, funcao, payload e CRC - para consultar depois de fechar o
+monitor. Se o arquivo ja existir, os eventos novos sao anexados ao
+final (o cabecalho so e escrito uma vez).
 """
 import argparse
+import csv
 import curses
+import os
 import time
 from collections import deque
 
@@ -137,7 +146,38 @@ def update_registry(registry, registry_order, frame, now):
     return status
 
 
-def run(stdscr, ser, silence, port_desc):
+LOG_HEADER = ['timestamp', 'status', 'slave_id', 'function_code',
+              'function_name', 'payload_hex', 'crc_ok', 'raw_hex']
+
+
+def open_log(path):
+    is_new = not (os.path.isfile(path) and os.path.getsize(path) > 0)
+    f = open(path, 'a', newline='')
+    writer = csv.writer(f)
+    if is_new:
+        writer.writerow(LOG_HEADER)
+        f.flush()
+    return f, writer
+
+
+def log_event(log_file, log_writer, now, status, frame):
+    slave_id = frame.get('slave_id')
+    function_code = frame.get('function_code')
+    row = [
+        time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
+        status if status else '',
+        slave_id if slave_id is not None else '',
+        ('0x%02X' % function_code) if function_code is not None else '',
+        function_name(function_code) if function_code is not None else '',
+        hexlify_spaced(frame.get('payload', b'')),
+        'OK' if frame.get('crc_ok') else 'BAD',
+        hexlify_spaced(frame.get('raw', b'')),
+    ]
+    log_writer.writerow(row)
+    log_file.flush()
+
+
+def run(stdscr, ser, silence, port_desc, log=None):
     curses.curs_set(0)
     has_color = curses.has_colors()
     if has_color:
@@ -188,10 +228,14 @@ def run(stdscr, ser, silence, port_desc):
                 status = update_registry(registry, registry_order, frame, now)
                 events.appendleft((now, status, frame))
             else:
-                events.appendleft((now, None, {
+                status = None
+                frame = {
                     'raw': bytes(buffer), 'slave_id': None,
                     'function_code': None, 'payload': b'', 'crc_ok': False,
-                }))
+                }
+                events.appendleft((now, status, frame))
+            if log is not None:
+                log_event(log[0], log[1], now, status, frame)
             buffer = bytearray()
             last_byte_time = None
 
@@ -279,6 +323,9 @@ def main():
     parser.add_argument('--baudrate', type=int, default=9600)
     parser.add_argument('--parity', default='N', choices=['N', 'E', 'O'])
     parser.add_argument('--stopbits', type=int, default=1)
+    parser.add_argument('--log', default=None,
+                         help="Caminho de um CSV onde cada evento e gravado "
+                              "conforme acontece (anexa se ja existir)")
     args = parser.parse_args()
 
     ser = serial.Serial(args.port, args.baudrate, parity=args.parity,
@@ -286,10 +333,18 @@ def main():
     silence = max(char_time_seconds(args.baudrate, 8, args.parity, args.stopbits) * 3.5, 0.005)
     port_desc = "%s @ %s bps" % (args.port, args.baudrate)
 
+    log_file = None
+    log = None
+    if args.log:
+        log_file, log_writer = open_log(args.log)
+        log = (log_file, log_writer)
+
     try:
-        curses.wrapper(run, ser, silence, port_desc)
+        curses.wrapper(run, ser, silence, port_desc, log)
     finally:
         ser.close()
+        if log_file is not None:
+            log_file.close()
 
 
 if __name__ == '__main__':

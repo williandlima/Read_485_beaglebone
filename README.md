@@ -119,6 +119,18 @@ python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
 ```
 `Q` para sair.
 
+Para gravar cada evento (quadro completo, valido ou nao) em um CSV
+conforme acontece, use `--log`:
+
+```bash
+python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.csv
+```
+
+Colunas: `timestamp, status (new/changed/vazio), slave_id, function_code,
+function_name, payload_hex, crc_ok, raw_hex`. Se o arquivo ja existir,
+os eventos novos sao anexados ao final (o cabecalho so e escrito uma
+vez).
+
 ### Testar sem hardware (legacy_py34/simulate_bus.py)
 
 Gera trafego Modbus RTU valido (CRC correto) em uma porta serial, com um
