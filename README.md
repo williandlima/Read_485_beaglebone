@@ -98,6 +98,23 @@ examples/
   read_holding_registers.py  # exemplo minimo sem arquivo de config
 ```
 
+## Descobrir baudrate/paridade (legacy_py34/scan_baudrate.py)
+
+Se voce nao sabe o baudrate/paridade do barramento, esta ferramenta
+testa uma lista de combinacoes comuns (9600/19200/38400/57600/115200 x
+N/E/O) escutando por alguns segundos em cada uma e contando quantos
+quadros com CRC valido aparecem. So escuta, nunca escreve no
+barramento. Precisa ter trafego real rolando durante o teste (ex.:
+alguem operando o equipamento, ou o CLP fazendo polling).
+
+```bash
+python3 legacy_py34/scan_baudrate.py /dev/ttyUSB0
+```
+
+A combinacao certa deve aparecer com varios quadros validos; as
+erradas normalmente mostram zero. Use `--duration` para escutar mais
+tempo em cada combinacao se o trafego for esparso (default 2s).
+
 ## Monitor visual do barramento (legacy_py34/bus_monitor.py)
 
 Interface em texto (curses, roda direto no terminal via SSH) que mostra
@@ -194,6 +211,9 @@ O `serial` vendorizado fica na raiz do projeto, entao os scripts em
 `legacy_py34/` precisam de `PYTHONPATH=.` para encontra-lo:
 
 ```bash
+# Descobrir baudrate/paridade do barramento (precisa de trafego real rolando)
+PYTHONPATH=. python3 legacy_py34/scan_baudrate.py /dev/ttyUSB0
+
 # Monitor com o conversor USB-RS485 (ajuste porta/baudrate conforme o barramento)
 PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
 
