@@ -128,7 +128,11 @@ python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.lo
 ```
 
 Texto simples, uma linha por evento (sem CRC, sem hex bruto, sem
-repeticoes do mesmo valor):
+repeticoes do mesmo valor). O comando default aparece em verde e o
+comando novo em amarelo (codigos ANSI, aparecem coloridos ao ver o
+arquivo com `cat` no terminal; em editores sem suporte a ANSI, como o
+Bloco de Notas do Windows, aparecem como codigos de escape ao redor do
+valor, mas o texto continua legivel):
 
 ```
 01:35:04  DEFAULT   Slave 2  Read Holding Registers    comando=02 00 00

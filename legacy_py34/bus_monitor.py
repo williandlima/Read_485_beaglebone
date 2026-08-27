@@ -146,6 +146,11 @@ def update_registry(registry, registry_order, frame, now):
     return status
 
 
+ANSI_GREEN = '\033[92m'
+ANSI_YELLOW = '\033[93m'
+ANSI_RESET = '\033[0m'
+
+
 def open_log(path):
     return open(path, 'a')
 
@@ -154,19 +159,24 @@ def log_default(log_file, now, frame):
     """Grava a linha que define o comando default de um escravo/funcao
     (a primeira vez que ele aparece no barramento)."""
     when = time.strftime('%H:%M:%S', time.localtime(now))
-    line = "%s  DEFAULT   Slave %d  %-24s  comando=%s\n" % (
+    line = "%s  DEFAULT   Slave %d  %-24s  comando=%s%s%s\n" % (
         when, frame['slave_id'], function_name(frame['function_code']),
-        hexlify_spaced(frame['payload']))
+        ANSI_GREEN, hexlify_spaced(frame['payload']), ANSI_RESET)
     log_file.write(line)
     log_file.flush()
 
 
 def log_change(log_file, now, frame, default_payload):
-    """Grava a linha de uma mudanca: comando default vs comando novo."""
+    """Grava a linha de uma mudanca: comando default vs comando novo.
+
+    O comando novo aparece em amarelo (codigo ANSI) para se destacar
+    quando o arquivo e visto com 'cat' no terminal.
+    """
     when = time.strftime('%H:%M:%S', time.localtime(now))
-    line = "%s  MUDOU     Slave %d  %-24s  default=%s  novo=%s\n" % (
+    line = "%s  MUDOU     Slave %d  %-24s  default=%s  novo=%s%s%s\n" % (
         when, frame['slave_id'], function_name(frame['function_code']),
-        hexlify_spaced(default_payload), hexlify_spaced(frame['payload']))
+        hexlify_spaced(default_payload),
+        ANSI_YELLOW, hexlify_spaced(frame['payload']), ANSI_RESET)
     log_file.write(line)
     log_file.flush()
 
