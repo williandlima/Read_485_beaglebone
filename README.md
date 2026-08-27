@@ -174,3 +174,50 @@ python3 legacy_py34/simulate_bus.py /dev/pts/3 --baudrate 9600
 # Terminal 3 (use o caminho impresso como "lado B")
 python3 legacy_py34/bus_monitor.py /dev/pts/4 --baudrate 9600
 ```
+
+## Referencia rapida de comandos
+
+### Acessar a BeagleBone
+
+```bash
+ssh debian@192.168.7.2
+cd ~/Read_485_beaglebone
+```
+
+### Na BeagleBone real (Python 3.4, `legacy_py34/`)
+
+O `serial` vendorizado fica na raiz do projeto, entao os scripts em
+`legacy_py34/` precisam de `PYTHONPATH=.` para encontra-lo:
+
+```bash
+# Monitor com o conversor USB-RS485 (ajuste porta/baudrate conforme o barramento)
+PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
+
+# Idem, gravando so o default e as mudancas em texto
+PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
+
+# Testar sem hardware: ponte de portas virtuais (alternativa ao socat)
+PYTHONPATH=. python3 -u legacy_py34/ptybridge.py > /tmp/bridge.log 2>&1 &
+cat /tmp/bridge.log   # mostra os dois caminhos /dev/pts/N a usar abaixo
+
+# Gerar trafego falso num dos lados da ponte
+PYTHONPATH=. python3 legacy_py34/simulate_bus.py /dev/pts/N --baudrate 9600 &
+
+# Monitorar o outro lado
+PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/pts/M --baudrate 9600
+
+# Encerrar processos de fundo
+pkill -f ptybridge.py; pkill -f simulate_bus.py
+```
+
+### Em um PC/dev machine com Python 3.6+ (`src/`)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp config/config.example.yaml config/config.yaml
+
+python -m src.rs485_sniffer --config config/config.yaml
+python -m src.modbus_reader --config config/config.yaml --continuous
+python examples/read_holding_registers.py /dev/ttyUSB0 --slave 1 --address 0 --count 10
+```
