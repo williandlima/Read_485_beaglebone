@@ -136,3 +136,22 @@ python3 legacy_py34/simulate_bus.py /tmp/ttyBUS_A --baudrate 9600
 # Terminal 3: monitora
 python3 legacy_py34/bus_monitor.py /tmp/ttyBUS_B --baudrate 9600
 ```
+
+Se `socat` nao estiver instalado (ex.: BeagleBone sem internet para
+`apt install`), use `legacy_py34/ptybridge.py` no lugar do Terminal 1 —
+faz a mesma coisa (cria e interliga dois pseudo-terminais) usando so a
+biblioteca padrao do Python:
+
+```bash
+# Terminal 1
+python3 legacy_py34/ptybridge.py
+# imprime algo como:
+#   lado A: /dev/pts/3
+#   lado B: /dev/pts/4
+
+# Terminal 2 (use o caminho impresso como "lado A")
+python3 legacy_py34/simulate_bus.py /dev/pts/3 --baudrate 9600
+
+# Terminal 3 (use o caminho impresso como "lado B")
+python3 legacy_py34/bus_monitor.py /dev/pts/4 --baudrate 9600
+```
