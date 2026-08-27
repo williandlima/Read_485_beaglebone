@@ -127,9 +127,12 @@ python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.cs
 ```
 
 Colunas: `timestamp, status (new/changed/vazio), slave_id, function_code,
-function_name, payload_hex, crc_ok, raw_hex`. Se o arquivo ja existir,
-os eventos novos sao anexados ao final (o cabecalho so e escrito uma
-vez).
+function_name, previous_payload_hex, payload_hex, diff, crc_ok,
+raw_hex`. A coluna `diff` mostra direto na linha o que mudou em relacao
+ao payload anterior da mesma combinacao (escravo, funcao) - ex.:
+`byte2:00->01` quando uma chave liga - sem precisar procurar a linha
+anterior pra comparar. Se o arquivo ja existir, os eventos novos sao
+anexados ao final (o cabecalho so e escrito uma vez).
 
 ### Testar sem hardware (legacy_py34/simulate_bus.py)
 

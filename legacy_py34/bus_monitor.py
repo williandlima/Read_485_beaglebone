@@ -147,7 +147,8 @@ def update_registry(registry, registry_order, frame, now):
 
 
 LOG_HEADER = ['timestamp', 'status', 'slave_id', 'function_code',
-              'function_name', 'payload_hex', 'crc_ok', 'raw_hex']
+              'function_name', 'previous_payload_hex', 'payload_hex', 'diff',
+              'crc_ok', 'raw_hex']
 
 
 def open_log(path):
@@ -160,16 +161,38 @@ def open_log(path):
     return f, writer
 
 
-def log_event(log_file, log_writer, now, status, frame):
+def payload_diff(old, new):
+    """Descreve, byte a byte, o que mudou entre dois payloads.
+
+    Ex.: "byte2: c8->c9" - facilita ver exatamente o que a chave/sensor
+    alterou sem precisar comparar as linhas anteriores na mao.
+    """
+    if old is None or old == new:
+        return ''
+    diffs = []
+    for i in range(max(len(old), len(new))):
+        old_byte = old[i] if i < len(old) else None
+        new_byte = new[i] if i < len(new) else None
+        if old_byte != new_byte:
+            old_str = '%02x' % old_byte if old_byte is not None else '--'
+            new_str = '%02x' % new_byte if new_byte is not None else '--'
+            diffs.append('byte%d:%s->%s' % (i, old_str, new_str))
+    return ' '.join(diffs)
+
+
+def log_event(log_file, log_writer, now, status, frame, previous_payload=None):
     slave_id = frame.get('slave_id')
     function_code = frame.get('function_code')
+    payload = frame.get('payload', b'')
     row = [
         time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
         status if status else '',
         slave_id if slave_id is not None else '',
         ('0x%02X' % function_code) if function_code is not None else '',
         function_name(function_code) if function_code is not None else '',
-        hexlify_spaced(frame.get('payload', b'')),
+        hexlify_spaced(previous_payload) if previous_payload is not None else '',
+        hexlify_spaced(payload),
+        payload_diff(previous_payload, payload),
         'OK' if frame.get('crc_ok') else 'BAD',
         hexlify_spaced(frame.get('raw', b'')),
     ]
@@ -225,9 +248,13 @@ def run(stdscr, ser, silence, port_desc, log=None):
         elif buffer and last_byte_time is not None and (now - last_byte_time) >= silence:
             frame = parse_frame(bytes(buffer))
             if frame is not None:
+                key = (frame['slave_id'], frame['function_code'])
+                prev_entry = registry.get(key)
+                previous_payload = prev_entry['payload'] if prev_entry else None
                 status = update_registry(registry, registry_order, frame, now)
                 events.appendleft((now, status, frame))
             else:
+                previous_payload = None
                 status = None
                 frame = {
                     'raw': bytes(buffer), 'slave_id': None,
@@ -235,7 +262,7 @@ def run(stdscr, ser, silence, port_desc, log=None):
                 }
                 events.appendleft((now, status, frame))
             if log is not None:
-                log_event(log[0], log[1], now, status, frame)
+                log_event(log[0], log[1], now, status, frame, previous_payload)
             buffer = bytearray()
             last_byte_time = None
 
