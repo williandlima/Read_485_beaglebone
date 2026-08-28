@@ -115,6 +115,20 @@ A combinacao certa deve aparecer com varios quadros validos; as
 erradas normalmente mostram zero. Use `--duration` para escutar mais
 tempo em cada combinacao se o trafego for esparso (default 2s).
 
+### Se a porta nao abre
+
+`scan_baudrate.py` e `bus_monitor.py` mostram o erro real do sistema
+(errno) e a causa provavel, em vez de so "erro ao abrir a porta". O
+errno diz exatamente o que corrigir:
+
+| Erro | Significado | Correcao |
+| --- | --- | --- |
+| `Permission denied` | usuario sem acesso ao dispositivo | `sudo`, ou `sudo usermod -aG dialout $USER` e relogar |
+| `Device or resource busy` | outro processo esta com a porta | `sudo fuser -v /dev/ttyUSB0` e finalizar o processo |
+| `No such file or directory` | o dispositivo sumiu | conversor desconectado ou driver descarregado; ver `dmesg \| tail` |
+| `Input/output error` | o `/dev/ttyUSB0` existe mas o driver nao fala com o chip | driver errado (ex.: `ftdi_sio` forcado num chip que nao e FTDI); tentar `cp210x`, `pl2303` ou `ch341` |
+| `Inappropriate ioctl for device` | o caminho nao e uma porta serial de verdade | conferir o caminho; `ls -l` deve mostrar `c` no inicio |
+
 ## Monitor visual do barramento (legacy_py34/bus_monitor.py)
 
 Interface em texto (curses, roda direto no terminal via SSH) que mostra

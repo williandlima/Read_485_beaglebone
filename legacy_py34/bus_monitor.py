@@ -30,10 +30,13 @@ final.
 """
 import argparse
 import curses
+import sys
 import time
 from collections import deque
 
 import serial
+
+from portdiag import OPEN_ERRORS, read_timeout_for, report_open_error
 
 FUNCTION_NAMES = {
     0x01: "Read Coils",
@@ -205,8 +208,12 @@ def run(stdscr, ser, silence, port_desc, log=None):
         attr_bad_crc = curses.A_REVERSE
         attr_header = curses.A_BOLD
 
+    # getch() nao pode bloquear: quem dita o ritmo do laco e a leitura da
+    # serial (ser.timeout, ajustado em main() para menos que o silencio
+    # entre quadros). Um stdscr.timeout(100) aqui prenderia o laco em ~10
+    # iteracoes/s e os quadros do barramento chegariam grudados.
     stdscr.nodelay(True)
-    stdscr.timeout(100)
+    stdscr.timeout(0)
 
     registry = {}
     registry_order = []
@@ -338,9 +345,15 @@ def main():
                               "toda mudanca em relacao a ele (anexa se ja existir)")
     args = parser.parse_args()
 
-    ser = serial.Serial(args.port, args.baudrate, parity=args.parity,
-                         stopbits=args.stopbits, timeout=0.01)
     silence = max(char_time_seconds(args.baudrate, 8, args.parity, args.stopbits) * 3.5, 0.005)
+
+    try:
+        ser = serial.Serial(args.port, args.baudrate, parity=args.parity,
+                             stopbits=args.stopbits,
+                             timeout=read_timeout_for(silence))
+    except OPEN_ERRORS as exc:
+        report_open_error(sys.stderr.write, args.port, exc)
+        return 1
     port_desc = "%s @ %s bps" % (args.port, args.baudrate)
 
     log = open_log(args.log) if args.log else None
@@ -354,4 +367,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main() or 0)

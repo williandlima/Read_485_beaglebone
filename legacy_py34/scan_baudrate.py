@@ -12,15 +12,13 @@ Uso:
     python3 scan_baudrate.py /dev/ttyUSB0 --duration 3
 """
 import argparse
+import sys
 import time
 
 import serial
 
-try:
-    import termios
-    TERMIOS_ERROR = termios.error
-except ImportError:
-    TERMIOS_ERROR = ()
+from portdiag import (OPEN_ERRORS, describe_open_error, read_timeout_for,
+                      report_open_error)
 
 CANDIDATE_BAUDRATES = [9600, 19200, 38400, 57600, 115200]
 CANDIDATE_PARITIES = ['N', 'E', 'O']
@@ -53,14 +51,17 @@ def char_time_seconds(baudrate, bytesize=8, parity='N', stopbits=1):
 
 
 def scan_one(port, baudrate, parity, duration):
-    """Escuta o barramento por 'duration' segundos nesta configuracao e
-    retorna (quadros_validos, quadros_invalidos)."""
-    try:
-        ser = serial.Serial(port, baudrate, parity=parity, stopbits=1, timeout=0.05)
-    except (serial.SerialException, OSError, TERMIOS_ERROR):
-        return None
+    """Escuta o barramento por 'duration' segundos nesta configuracao.
 
+    Retorna (validos, invalidos, None) em caso de sucesso, ou
+    (0, 0, mensagem_de_erro) se nao deu para abrir a porta."""
     silence = max(char_time_seconds(baudrate, 8, parity, 1) * 3.5, 0.005)
+    try:
+        ser = serial.Serial(port, baudrate, parity=parity, stopbits=1,
+                            timeout=read_timeout_for(silence))
+    except OPEN_ERRORS as exc:
+        return (0, 0, describe_open_error(exc)[0])
+
     buffer = bytearray()
     last_byte_time = None
     valid = 0
@@ -83,7 +84,7 @@ def scan_one(port, baudrate, parity, duration):
             last_byte_time = None
 
     ser.close()
-    return (valid, invalid)
+    return (valid, invalid, None)
 
 
 def main():
@@ -93,6 +94,16 @@ def main():
     parser.add_argument('--duration', type=float, default=2.0,
                          help="Segundos escutando em cada combinacao (default 2.0)")
     args = parser.parse_args()
+
+    # Antes de varrer 15 combinacoes, confirma que da para abrir a porta.
+    # Se nao der, o motivo e sempre o mesmo nas 15 - melhor mostrar a causa
+    # real uma vez do que repetir "ERRO ao abrir a porta" sem explicacao.
+    try:
+        probe = serial.Serial(args.port, 9600, timeout=0.1)
+    except OPEN_ERRORS as exc:
+        report_open_error(sys.stderr.write, args.port, exc)
+        return 1
+    probe.close()
 
     combos = [(b, p) for b in CANDIDATE_BAUDRATES for p in CANDIDATE_PARITIES]
     total = len(combos)
@@ -105,11 +116,10 @@ def main():
 
     for i, (baudrate, parity) in enumerate(combos, 1):
         print("[%d/%d] %d bps, paridade %s ... " % (i, total, baudrate, parity), end='')
-        result = scan_one(args.port, baudrate, parity, args.duration)
-        if result is None:
-            print("ERRO ao abrir a porta")
+        valid, invalid, error = scan_one(args.port, baudrate, parity, args.duration)
+        if error is not None:
+            print("ERRO ao abrir a porta: %s" % error)
             continue
-        valid, invalid = result
         print("%d quadros validos, %d invalidos" % (valid, invalid))
         results.append((baudrate, parity, valid, invalid))
 
@@ -128,4 +138,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main() or 0)
