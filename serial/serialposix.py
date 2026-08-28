@@ -287,8 +287,11 @@ class Serial(SerialBase, PlatformSpecific):
             if not self._rtscts:
                 self._update_rts_state()
         except IOError as e:
-            if e.errno in (errno.EINVAL, errno.ENOTTY):
-                # ignore Invalid argument and Inappropriate ioctl
+            if e.errno in (errno.EINVAL, errno.ENOTTY, errno.EIO):
+                # ignore Invalid argument, Inappropriate ioctl e Input/output
+                # error: conversores RS-485 costumam nao ter as linhas
+                # DTR/RTS fiadas a nada (RS-485 usa so o par A/B), entao o
+                # chip pode nem implementar esse comando de controle.
                 pass
             else:
                 raise
