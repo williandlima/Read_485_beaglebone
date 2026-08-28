@@ -291,3 +291,20 @@ python -m src.rs485_sniffer --config config/config.yaml
 python -m src.modbus_reader --config config/config.yaml --continuous
 python examples/read_holding_registers.py /dev/ttyUSB0 --slave 1 --address 0 --count 10
 ```
+
+## pyserial vendorizado (pasta serial/)
+
+O `pyserial` 3.4 esta versionado na raiz do projeto, em `serial/`. Ele e
+Python puro e a ultima versao que ainda suporta Python 3.4, entao roda
+direto na BeagleBone com Debian Jessie sem precisar de `pip` nem de
+internet na placa.
+
+E por isso que os scripts em `legacy_py34/` sao chamados com
+`PYTHONPATH=.` a partir da raiz do projeto: e assim que o Python acha
+essa copia.
+
+```bash
+PYTHONPATH=. python3 legacy_py34/scan_baudrate.py /dev/ttyUSB0
+```
+
+Licenca original em `serial/LICENSE.txt` (BSD 3-Clause, Chris Liechti).
