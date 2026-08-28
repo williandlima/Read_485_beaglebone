@@ -115,6 +115,30 @@ A combinacao certa deve aparecer com varios quadros validos; as
 erradas normalmente mostram zero. Use `--duration` para escutar mais
 tempo em cada combinacao se o trafego for esparso (default 2s).
 
+### O conversor USB-RS485 nao vira /dev/ttyUSB0
+
+Nao existe "driver para instalar" no Linux para esses conversores: os
+drivers (`ftdi_sio`, `cp210x`, `pl2303`, `ch341`) ja vem compilados no
+kernel. O que acontece com conversores OEM/rebrandeados e que o VID:PID
+deles nao esta na tabela de dispositivos conhecidos de nenhum driver -
+o kernel enxerga o dispositivo USB (`lsusb` mostra), mas nao liga
+nenhum driver serial a ele, e `/dev/ttyUSB0` nunca aparece.
+
+A correcao e registrar o VID:PID no driver certo. `scripts/setup_rs485_usb.sh`
+faz isso e instala uma regra de udev para que valha tambem depois de
+reiniciar ou reconectar:
+
+```bash
+lsusb                                  # ache a linha do conversor: "ID 0856:ac15"
+sudo ./scripts/setup_rs485_usb.sh      # default 0856:ac15 (Black Box SP390A-R2)
+sudo ./scripts/setup_rs485_usb.sh 0403 6001         # outro VID:PID
+sudo ./scripts/setup_rs485_usb.sh 0856 ac15 cp210x  # forcando outro driver
+```
+
+Se o `/dev/ttyUSB0` aparecer mas nao abrir com `Input/output error`, o
+driver registrado nao e o certo para o chip - repita com `cp210x`,
+`pl2303` ou `ch341`.
+
 ### Se a porta nao abre
 
 `scan_baudrate.py` e `bus_monitor.py` mostram o erro real do sistema
