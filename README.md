@@ -168,8 +168,16 @@ valor, mas o texto continua legivel):
 ```
 01:35:04  DEFAULT   Slave 2  Read Holding Registers    comando=02 00 00
 01:35:06  MUDOU     Slave 2  Read Holding Registers    default=02 00 00  novo=02 00 01
-01:35:09  MUDOU     Slave 2  Read Holding Registers    default=02 00 00  novo=02 00 00
+01:35:09  VOLTOU    Slave 2  Read Holding Registers    comando=02 00 00
 ```
+
+Sao tres tipos de linha:
+
+- **DEFAULT** — primeira vez que aquele escravo/funcao aparece com CRC
+  valido; define o comando de referencia daquela combinacao
+- **MUDOU** — apareceu um comando diferente do default (mostra os dois
+  lado a lado)
+- **VOLTOU** — o comando voltou a ser exatamente o default
 
 Se o arquivo ja existir, as linhas novas sao anexadas ao final.
 

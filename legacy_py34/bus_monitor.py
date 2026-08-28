@@ -21,12 +21,16 @@ Uso:
     (Q para sair)
 
 Com --log, so o que importa e gravado em texto simples, uma linha por
-evento: quando cada escravo/funcao apareceu pela primeira vez (define o
-"comando default" daquela combinacao) e, depois, toda vez que o
-payload mudar em relacao a esse default - mostrando lado a lado o
-default e o comando novo que apareceu. Repeticoes do mesmo valor nao
-sao gravadas. Se o arquivo ja existir, as linhas novas sao anexadas ao
-final.
+evento, de tres tipos:
+
+  DEFAULT  primeira vez que aquele escravo/funcao aparece com CRC
+           valido; define o "comando default" daquela combinacao
+  MUDOU    apareceu um comando diferente do default (mostra os dois
+           lado a lado)
+  VOLTOU   o comando voltou a ser exatamente o default
+
+Repeticoes do mesmo valor nao sao gravadas. Se o arquivo ja existir, as
+linhas novas sao anexadas ao final.
 """
 import argparse
 import curses
@@ -169,6 +173,20 @@ def log_default(log_file, now, frame):
     log_file.flush()
 
 
+def log_return(log_file, now, frame):
+    """Grava quando o payload volta a ser exatamente o comando default.
+
+    Sem isso a linha sairia como MUDOU com 'novo' igual ao 'default', o
+    que se le como uma contradicao.
+    """
+    when = time.strftime('%H:%M:%S', time.localtime(now))
+    line = "%s  VOLTOU    Slave %d  %-24s  comando=%s%s%s\n" % (
+        when, frame['slave_id'], function_name(frame['function_code']),
+        ANSI_GREEN, hexlify_spaced(frame['payload']), ANSI_RESET)
+    log_file.write(line)
+    log_file.flush()
+
+
 def log_change(log_file, now, frame, default_payload):
     """Grava a linha de uma mudanca: comando default vs comando novo.
 
@@ -241,11 +259,19 @@ def run(stdscr, ser, silence, port_desc, log=None):
                 status = update_registry(registry, registry_order, frame, now)
                 events.appendleft((now, status, frame))
                 if log is not None and frame['crc_ok']:
-                    if status == 'new':
+                    default_payload = defaults.get(key)
+                    if default_payload is None:
+                        # O primeiro quadro VALIDO desta combinacao define o
+                        # default. Nao da para usar status == 'new' aqui: se o
+                        # primeiro quadro visto tinha CRC ruim, ele ja marcou a
+                        # combinacao como conhecida sem definir default nenhum.
                         defaults[key] = frame['payload']
                         log_default(log, now, frame)
                     elif status == 'changed':
-                        log_change(log, now, frame, defaults.get(key, frame['payload']))
+                        if frame['payload'] == default_payload:
+                            log_return(log, now, frame)
+                        else:
+                            log_change(log, now, frame, default_payload)
             else:
                 frame = {
                     'raw': bytes(buffer), 'slave_id': None,
