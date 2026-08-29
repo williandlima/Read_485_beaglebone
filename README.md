@@ -153,6 +153,22 @@ errno diz exatamente o que corrigir:
 | `Input/output error` | o `/dev/ttyUSB0` existe mas o driver nao fala com o chip | driver errado (ex.: `ftdi_sio` forcado num chip que nao e FTDI); tentar `cp210x`, `pl2303` ou `ch341` |
 | `Inappropriate ioctl for device` | o caminho nao e uma porta serial de verdade | conferir o caminho; `ls -l` deve mostrar `c` no inicio |
 
+## Lançador (scripts/ler_barramento.sh)
+
+Reúne num comando só o que hoje precisa de vários passos manuais: achar
+a porta serial, ligar o driver do conversor se `/dev/ttyUSB*` ainda não
+existir, e apontar o `PYTHONPATH` certo para rodar `bus_monitor.py`.
+
+```bash
+./scripts/ler_barramento.sh                       # autodetecta porta, 9600 N
+./scripts/ler_barramento.sh --baudrate 19200
+./scripts/ler_barramento.sh --parity E --log eventos.log
+./scripts/ler_barramento.sh /dev/ttyUSB1 --baudrate 38400
+```
+
+Qualquer argumento além da porta é repassado direto para o
+`bus_monitor.py` (mesmas opções: `--baudrate`, `--parity`, `--log`).
+
 ## Monitor visual do barramento (legacy_py34/bus_monitor.py)
 
 Interface em texto (curses, roda direto no terminal via SSH) que mostra
@@ -242,6 +258,68 @@ python3 legacy_py34/simulate_bus.py /dev/pts/3 --baudrate 9600
 python3 legacy_py34/bus_monitor.py /dev/pts/4 --baudrate 9600
 ```
 
+### Simular um escravo Modbus RTU real (legacy_py34/modbus_slave_sim.py)
+
+Diferente do `simulate_bus.py` (que so blasta frames sem serem
+pedidos), este simula um dispositivo que **responde a consultas** -
+util para validar a cadeia inteira (conversor, driver, pyserial,
+consulta ativa, `bus_monitor.py`) sobre um barramento RS-485 de
+verdade, sem depender de um equipamento industrial disponivel. Basta
+dois conversores na mesma linha A/B: um roda o simulador, o outro
+consulta ou so escuta.
+
+So suporta a funcao 0x03 (Read Holding Registers), sobre um banco de
+registradores em memoria; o registrador 1 alterna de valor
+periodicamente (`--change-every`, default 5s), para testar o destaque
+MUDOU.
+
+```bash
+python3 legacy_py34/modbus_slave_sim.py /dev/ttyUSB0 --slave 1 --baudrate 9600
+python modbus_slave_sim.py COM8 --slave 1 --baudrate 9600   # Windows
+```
+
+### Diagnostico de porta sem pyserial (legacy_py34/diagnose_port.py)
+
+Autocontido (so biblioteca padrao) para colar direto num terminal SSH
+sem precisar copiar o repositorio inteiro. Separa uma falha no
+`open()` do kernel (driver errado, porta ocupada, dispositivo sumido)
+de uma falha na configuracao da porta pelo pyserial (termios, baudrate,
+paridade) - sao causas diferentes, com correcoes diferentes.
+
+```bash
+python3 legacy_py34/diagnose_port.py /dev/ttyUSB0
+```
+
+## Driver FTDI no Windows (scripts/fix_ftdi_windows.py)
+
+Conversores com VID:PID de OEM (o padrao aqui, `0856:AC15`, e do Black
+Box SP390A-R2) nao constam nos `.inf` da FTDI, entao o Windows nao
+vincula o driver sozinho. Forcar a vinculacao pelo Gerenciador de
+Dispositivos erra facilmente a camada: o driver de porta (`FTSER2K`)
+acaba direto sobre o no USB cru, sem o driver de barramento
+(`FTDIBUS`) embaixo. Nesse estado a porta COM abre, aceita `write()` e
+reporta "funcionando corretamente" - mas nao emite nenhuma
+transferencia USB, entao nenhum byte chega ao chip e o LED de TX nunca
+acende. Parece defeito eletrico; e driver mal instalado.
+
+O script diagnostica as duas camadas e corrige selecionando o no de
+driver certo diretamente (o mesmo caminho que "Deixe-me escolher entre
+uma lista de drivers" usa por baixo), sem depender de casamento de
+hardware ID - por isso funciona com VID:PID de OEM. Os binarios
+continuam sendo os assinados do DriverStore.
+
+```powershell
+python fix_ftdi_windows.py                 # diagnostica, corrige e verifica
+python fix_ftdi_windows.py --dry-run       # so diagnostica
+python fix_ftdi_windows.py --vid 0403 --pid 6001
+python fix_ftdi_windows.py --test COM8     # so o teste de loopback
+```
+
+Pede elevação (UAC) sozinho quando precisa. A janela elevada fica
+aberta no final esperando Enter, e a saída completa também é salva em
+`%TEMP%\fix_ftdi_windows.log` - a janela do UAC fecha sozinha ao
+terminar, entao sem isso o relatório se perderia.
+
 ## Referencia rapida de comandos
 
 ### Acessar a BeagleBone
@@ -308,3 +386,18 @@ PYTHONPATH=. python3 legacy_py34/scan_baudrate.py /dev/ttyUSB0
 ```
 
 Licenca original em `serial/LICENSE.txt` (BSD 3-Clause, Chris Liechti).
+
+### Patch aplicado: EIO ignorado ao setar DTR/RTS na abertura
+
+`serial/serialposix.py` tem uma modificacao em relacao ao pyserial
+original: no `open()`, a excecao ao tentar setar DTR/RTS agora tambem
+ignora `errno.EIO`, alem de `EINVAL`/`ENOTTY` (que o pyserial ja
+ignorava por motivo parecido). Conversores RS-485 tipicamente nao tem
+essas linhas fiadas a nada (RS-485 usa so o par A/B), entao o chip pode
+nao implementar esse comando de controle, e o driver do kernel retorna
+Input/output error - o que antes derrubava a abertura da porta com
+`OSError: [Errno 5]` mesmo com o driver certo (`ftdi_sio`) e o
+dispositivo saudavel.
+
+Se algum dia vendorizar uma versao mais nova do pyserial, reaplique
+esse ajuste em `open()` (procure por `errno.EINVAL, errno.ENOTTY`).
