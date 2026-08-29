@@ -31,12 +31,14 @@ Uso:
 """
 
 import argparse
+import atexit
 import ctypes
 import glob
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 VID_PADRAO = "0856"
@@ -49,8 +51,56 @@ INSTALLFLAG_FORCE = 0x00000001
 
 PAYLOAD = b"\xAA\x55\x01\x02\x03\x04\xFF"
 
+CAMINHO_LOG = os.path.join(tempfile.gettempdir(), "fix_ftdi_windows.log")
+
 
 # ---------------------------------------------------------------- utilidades
+
+
+class Tee:
+    """Espelha a saida no console e num arquivo de log.
+
+    A janela elevada aberta pelo UAC fecha assim que o script termina, entao
+    sem o log o relatorio se perde antes de ser lido.
+    """
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, dados):
+        for s in self.streams:
+            try:
+                s.write(dados)
+                s.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def iniciar_log():
+    try:
+        arquivo = open(CAMINHO_LOG, "w", encoding="utf-8", errors="replace")
+    except Exception:
+        return
+    sys.stdout = Tee(sys.__stdout__, arquivo)
+    sys.stderr = Tee(sys.__stderr__, arquivo)
+    atexit.register(arquivo.close)
+
+
+def pausar_ao_sair():
+    """Segura a janela aberta para o relatorio poder ser lido."""
+    print()
+    print("Log salvo em: {}".format(CAMINHO_LOG))
+    try:
+        input("Pressione Enter para fechar esta janela...")
+    except Exception:
+        pass
 
 
 def secao(titulo):
@@ -74,16 +124,28 @@ def e_admin():
 
 
 def reabrir_como_admin():
-    """Relanca o script com elevacao (dispara o prompt do UAC)."""
-    params = " ".join('"{}"'.format(a) for a in sys.argv)
+    """Relanca o script com elevacao (dispara o prompt do UAC).
+
+    O filho recebe --elevated para saber que precisa segurar a janela aberta
+    no fim -- do contrario o console some junto com o relatorio.
+    """
+    argumentos = list(sys.argv) + ["--elevated"]
+    params = " ".join('"{}"'.format(a) for a in argumentos)
     rc = ctypes.windll.shell32.ShellExecuteW(
         None, "runas", sys.executable, params, None, 1
     )
     if rc <= 32:
         print("Falha ao solicitar elevacao (codigo {}).".format(rc))
-        print("Abra o PowerShell como Administrador e rode o script de novo.")
+        if rc == 5:
+            print("O prompt do UAC foi recusado.")
+        print()
+        print("Alternativa: abra o PowerShell como Administrador")
+        print("(Win -> digite powershell -> botao direito -> Executar como")
+        print("administrador) e rode o script por la.")
         sys.exit(1)
-    print("Uma janela elevada foi aberta. Acompanhe o resultado por la.")
+    print("Uma janela elevada foi aberta -- aceite o prompt do UAC.")
+    print("O relatorio aparece la e tambem fica salvo em:")
+    print("  {}".format(CAMINHO_LOG))
     sys.exit(0)
 
 
@@ -411,9 +473,23 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="so diagnostica, nao corrige")
     p.add_argument("--test", metavar="COMx", help="so roda o teste de loopback nessa porta")
     p.add_argument("--baud", type=int, default=9600, help="baud do teste (padrao: %(default)s)")
+    p.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args()
 
     exigir_windows()
+
+    # Relanca antes de abrir o log, para que so o processo que faz o trabalho
+    # seja dono do arquivo.
+    precisa_elevar = not args.test and not args.dry_run and not e_admin()
+    if precisa_elevar:
+        print("Preciso de privilegio de administrador para religar os drivers.")
+        reabrir_como_admin()
+
+    iniciar_log()
+
+    # A janela aberta pelo UAC fecha sozinha no fim; sem isso o relatorio some.
+    if args.elevated:
+        atexit.register(pausar_ao_sair)
 
     if args.test:
         secao("TESTE DE LOOPBACK")
@@ -421,10 +497,6 @@ def main():
 
     vid = args.vid.upper().replace("0X", "")
     pid = args.pid.upper().replace("0X", "")
-
-    if not args.dry_run and not e_admin():
-        print("Preciso de privilegio de administrador para religar os drivers.")
-        reabrir_como_admin()
 
     secao("ESTADO ATUAL DA PILHA  (VID_{} PID_{})".format(vid, pid))
     dispositivos = enumerar(vid, pid)
