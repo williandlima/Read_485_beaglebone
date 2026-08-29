@@ -100,7 +100,6 @@ def main():
                     help="Segundos entre mudancas do registrador 1 (default: 5)")
     args = p.parse_args()
 
-    ser = serial.Serial(args.port, args.baudrate, parity=args.parity, timeout=0.05)
     silencio = silencio_entre_frames(args.baudrate, args.parity)
 
     # Banco de registradores simulado: registrador 0 fixo, registrador 1 alterna.
@@ -113,6 +112,8 @@ def main():
         args.change_every))
     print("So suporta a funcao 0x03 (Read Holding Registers). Ctrl+C para parar.\n")
 
+    ser = serial.Serial(args.port, args.baudrate, parity=args.parity, timeout=0.05)
+
     try:
         while True:
             if time.time() >= proxima_mudanca:
@@ -120,7 +121,22 @@ def main():
                 proxima_mudanca = time.time() + args.change_every
                 print("-> registrador 1 mudou para {}".format(registradores[1]))
 
-            frame = ler_frame(ser, silencio)
+            try:
+                frame = ler_frame(ser, silencio)
+            except serial.SerialException as e:
+                # Soluco transitorio da porta (ClearCommError e comum no
+                # Windows sob leitura continua). Reabre e segue rodando em
+                # vez de derrubar o simulador inteiro.
+                print("aviso: erro na porta ({}), reabrindo...".format(e))
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                ser = serial.Serial(args.port, args.baudrate, parity=args.parity,
+                                     timeout=0.05)
+                continue
+
             if len(frame) < 4:
                 continue
 
@@ -143,12 +159,19 @@ def main():
 
             valores = [registradores.get(addr + i, 0) for i in range(qtd)]
             resposta = resposta_read_holding(slave_id, valores)
-            ser.write(resposta)
+            try:
+                ser.write(resposta)
+            except serial.SerialException as e:
+                print("aviso: erro ao responder ({}), ignorando esta consulta".format(e))
+                continue
             print("respondi a leitura addr={} qtd={}: {}".format(addr, qtd, valores))
     except KeyboardInterrupt:
         print("\nEncerrado pelo usuario.")
     finally:
-        ser.close()
+        try:
+            ser.close()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
