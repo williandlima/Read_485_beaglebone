@@ -295,7 +295,13 @@ def localizar_infs():
 
 
 def forcar_driver(hardware_id, caminho_inf):
-    """Vincula um .inf a um hardware ID ignorando a checagem de compatibilidade."""
+    """Tenta vincular um .inf pelo hardware ID.
+
+    So funciona quando o .inf realmente lista o ID: INSTALLFLAG_FORCE dispensa
+    o ranking de "melhor driver", nao a checagem de compatibilidade. Para um
+    VID:PID de OEM ausente do .inf isto falha, e a saida cai em
+    instalar_via_inf(), que seleciona o no de driver diretamente.
+    """
     from ctypes import wintypes
 
     newdev = ctypes.WinDLL("newdev.dll", use_last_error=True)
@@ -315,6 +321,266 @@ def forcar_driver(hardware_id, caminho_inf):
     return bool(ok), erro, bool(reiniciar.value)
 
 
+# --------------------------------------------------- instalacao por no de driver
+#
+# Este e o caminho que a opcao "Deixe-me escolher entre uma lista de drivers"
+# usa por baixo. Em vez de procurar no .inf um driver que case com o hardware
+# ID do dispositivo, ele enumera os nos de driver de um .inf especifico
+# (DI_ENUMSINGLEINF), seleciona um a dedo e manda instalar. Como nao ha etapa
+# de casamento de ID, funciona com VID:PID de OEM ausentes do .inf -- e os
+# binarios continuam sendo os assinados que ja estao no DriverStore.
+
+MAX_PATH = 260
+LINE_LEN = 256
+
+DIGCF_PRESENT = 0x00000002
+DIGCF_ALLCLASSES = 0x00000004
+
+SPDIT_CLASSDRIVER = 0x00000001
+
+DI_ENUMSINGLEINF = 0x00010000
+DI_FLAGSEX_ALLOWEXCLUDEDDRVS = 0x00000800
+
+_api_cache = {}
+
+
+def _api():
+    """Carrega setupapi/newdev e as estruturas necessarias (so no Windows)."""
+    if _api_cache:
+        return _api_cache
+
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_ulong),
+            ("Data2", ctypes.c_ushort),
+            ("Data3", ctypes.c_ushort),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    class SP_DEVINFO_DATA(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("ClassGuid", GUID),
+            ("DevInst", wintypes.DWORD),
+            ("Reserved", ctypes.c_size_t),
+        ]
+
+    class SP_DRVINFO_DATA_V2_W(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("DriverType", wintypes.DWORD),
+            ("Reserved", ctypes.c_size_t),
+            ("Description", wintypes.WCHAR * LINE_LEN),
+            ("MfgName", wintypes.WCHAR * LINE_LEN),
+            ("ProviderName", wintypes.WCHAR * LINE_LEN),
+            ("DriverDate", wintypes.FILETIME),
+            ("DriverVersion", ctypes.c_ulonglong),
+        ]
+
+    class SP_DEVINSTALL_PARAMS_W(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("Flags", wintypes.DWORD),
+            ("FlagsEx", wintypes.DWORD),
+            ("hwndParent", wintypes.HWND),
+            ("InstallMsgHandler", ctypes.c_void_p),
+            ("InstallMsgHandlerContext", ctypes.c_void_p),
+            ("FileQueue", ctypes.c_void_p),
+            ("ClassInstallReserved", ctypes.c_size_t),
+            ("Reserved", wintypes.DWORD),
+            ("DriverPath", wintypes.WCHAR * MAX_PATH),
+        ]
+
+    setupapi = ctypes.WinDLL("setupapi.dll", use_last_error=True)
+    newdev = ctypes.WinDLL("newdev.dll", use_last_error=True)
+
+    setupapi.SetupDiGetClassDevsW.restype = ctypes.c_void_p
+    setupapi.SetupDiGetClassDevsW.argtypes = [
+        ctypes.c_void_p, wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD,
+    ]
+    setupapi.SetupDiEnumDeviceInfo.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(SP_DEVINFO_DATA),
+    ]
+    setupapi.SetupDiGetDeviceInstanceIdW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA), wintypes.LPWSTR,
+        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    setupapi.SetupDiGetDeviceInstallParamsW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA),
+        ctypes.POINTER(SP_DEVINSTALL_PARAMS_W),
+    ]
+    setupapi.SetupDiSetDeviceInstallParamsW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA),
+        ctypes.POINTER(SP_DEVINSTALL_PARAMS_W),
+    ]
+    setupapi.SetupDiBuildDriverInfoList.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA), wintypes.DWORD,
+    ]
+    setupapi.SetupDiEnumDriverInfoW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA), wintypes.DWORD,
+        wintypes.DWORD, ctypes.POINTER(SP_DRVINFO_DATA_V2_W),
+    ]
+    setupapi.SetupDiSetSelectedDriverW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA),
+        ctypes.POINTER(SP_DRVINFO_DATA_V2_W),
+    ]
+    setupapi.SetupDiDestroyDriverInfoList.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA), wintypes.DWORD,
+    ]
+    setupapi.SetupDiDestroyDeviceInfoList.argtypes = [ctypes.c_void_p]
+
+    newdev.DiInstallDevice.argtypes = [
+        wintypes.HWND, ctypes.c_void_p, ctypes.POINTER(SP_DEVINFO_DATA),
+        ctypes.POINTER(SP_DRVINFO_DATA_V2_W), wintypes.DWORD,
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    newdev.DiInstallDevice.restype = wintypes.BOOL
+
+    _api_cache.update(
+        setupapi=setupapi,
+        newdev=newdev,
+        SP_DEVINFO_DATA=SP_DEVINFO_DATA,
+        SP_DRVINFO_DATA_V2_W=SP_DRVINFO_DATA_V2_W,
+        SP_DEVINSTALL_PARAMS_W=SP_DEVINSTALL_PARAMS_W,
+        wintypes=wintypes,
+    )
+    return _api_cache
+
+
+def _achar_devinfo(api, instance_id):
+    """Localiza o dispositivo pelo InstanceId. Devolve (handle, devinfo)."""
+    setupapi = api["setupapi"]
+    SP_DEVINFO_DATA = api["SP_DEVINFO_DATA"]
+    wintypes = api["wintypes"]
+
+    handle = setupapi.SetupDiGetClassDevsW(
+        None, None, None, DIGCF_PRESENT | DIGCF_ALLCLASSES
+    )
+    if handle in (None, 0) or handle == ctypes.c_void_p(-1).value:
+        return None, None
+
+    alvo = instance_id.upper()
+    indice = 0
+    while True:
+        info = SP_DEVINFO_DATA()
+        info.cbSize = ctypes.sizeof(SP_DEVINFO_DATA)
+        if not setupapi.SetupDiEnumDeviceInfo(handle, indice, ctypes.byref(info)):
+            break
+        indice += 1
+
+        buf = ctypes.create_unicode_buffer(MAX_PATH)
+        necessario = wintypes.DWORD(0)
+        if not setupapi.SetupDiGetDeviceInstanceIdW(
+            handle, ctypes.byref(info), buf, MAX_PATH, ctypes.byref(necessario)
+        ):
+            continue
+        if buf.value.upper() == alvo:
+            return handle, info
+
+    setupapi.SetupDiDestroyDeviceInfoList(handle)
+    return None, None
+
+
+def instalar_via_inf(instance_id, caminho_inf, preferencia=None):
+    """Instala um no de driver de um .inf especifico no dispositivo dado.
+
+    Replica o caminho "Deixe-me escolher entre uma lista de drivers": nao ha
+    casamento de hardware ID, entao funciona com VID:PID de OEM.
+    Devolve (ok, mensagem).
+    """
+    api = _api()
+    setupapi = api["setupapi"]
+    newdev = api["newdev"]
+    SP_DRVINFO = api["SP_DRVINFO_DATA_V2_W"]
+    SP_PARAMS = api["SP_DEVINSTALL_PARAMS_W"]
+    wintypes = api["wintypes"]
+
+    handle, info = _achar_devinfo(api, instance_id)
+    if handle is None:
+        return False, "dispositivo {} nao encontrado (esta conectado?)".format(instance_id)
+
+    try:
+        # Restringe a busca de drivers a este unico .inf.
+        params = SP_PARAMS()
+        params.cbSize = ctypes.sizeof(SP_PARAMS)
+        if not setupapi.SetupDiGetDeviceInstallParamsW(
+            handle, ctypes.byref(info), ctypes.byref(params)
+        ):
+            return False, "SetupDiGetDeviceInstallParams falhou (erro {})".format(
+                ctypes.get_last_error())
+
+        params.Flags |= DI_ENUMSINGLEINF
+        params.FlagsEx |= DI_FLAGSEX_ALLOWEXCLUDEDDRVS
+        params.DriverPath = caminho_inf
+        if not setupapi.SetupDiSetDeviceInstallParamsW(
+            handle, ctypes.byref(info), ctypes.byref(params)
+        ):
+            return False, "SetupDiSetDeviceInstallParams falhou (erro {})".format(
+                ctypes.get_last_error())
+
+        if not setupapi.SetupDiBuildDriverInfoList(
+            handle, ctypes.byref(info), SPDIT_CLASSDRIVER
+        ):
+            return False, "SetupDiBuildDriverInfoList falhou (erro {})".format(
+                ctypes.get_last_error())
+
+        # Enumera os nos de driver do .inf e escolhe o desejado.
+        escolhido = None
+        disponiveis = []
+        indice = 0
+        while True:
+            drv = SP_DRVINFO()
+            drv.cbSize = ctypes.sizeof(SP_DRVINFO)
+            if not setupapi.SetupDiEnumDriverInfoW(
+                handle, ctypes.byref(info), SPDIT_CLASSDRIVER, indice, ctypes.byref(drv)
+            ):
+                break
+            indice += 1
+            disponiveis.append(drv.Description)
+            if escolhido is None:
+                if preferencia is None or drv.Description.strip().lower() == preferencia.lower():
+                    escolhido = drv
+
+        if escolhido is None and disponiveis:
+            # A descricao preferida nao existe neste .inf; usa o primeiro no.
+            drv = SP_DRVINFO()
+            drv.cbSize = ctypes.sizeof(SP_DRVINFO)
+            if setupapi.SetupDiEnumDriverInfoW(
+                handle, ctypes.byref(info), SPDIT_CLASSDRIVER, 0, ctypes.byref(drv)
+            ):
+                escolhido = drv
+
+        if escolhido is None:
+            return False, "nenhum no de driver em {}".format(os.path.basename(caminho_inf))
+
+        if not setupapi.SetupDiSetSelectedDriverW(
+            handle, ctypes.byref(info), ctypes.byref(escolhido)
+        ):
+            return False, "SetupDiSetSelectedDriver falhou (erro {})".format(
+                ctypes.get_last_error())
+
+        reiniciar = wintypes.BOOL(False)
+        ok = newdev.DiInstallDevice(
+            None, handle, ctypes.byref(info), ctypes.byref(escolhido), 0,
+            ctypes.byref(reiniciar),
+        )
+        if not ok:
+            return False, "DiInstallDevice falhou (erro {}); nos disponiveis: {}".format(
+                ctypes.get_last_error(), ", ".join(disponiveis) or "nenhum")
+
+        return True, 'instalado "{}"'.format(escolhido.Description.strip())
+    finally:
+        try:
+            setupapi.SetupDiDestroyDriverInfoList(
+                handle, ctypes.byref(info), SPDIT_CLASSDRIVER
+            )
+        except Exception:
+            pass
+        setupapi.SetupDiDestroyDeviceInfoList(handle)
+
+
 def hardware_id_base(dispositivo, prefixo):
     """Escolhe o hardware ID mais generico que comeca com o prefixo dado."""
     candidatos = [
@@ -331,13 +597,47 @@ def rescan():
     time.sleep(2)
 
 
+def vincular(instance_id, caminho_inf, hwid, preferencia):
+    """Vincula um .inf a um dispositivo, tentando os dois caminhos disponiveis.
+
+    Primeiro o casamento por hardware ID (rapido, mas so funciona se o .inf
+    listar o ID); depois a selecao direta do no de driver, que e o que resolve
+    para VID:PID de OEM.
+    """
+    if hwid:
+        ok, erro, _ = forcar_driver(hwid, caminho_inf)
+        if ok:
+            return True, "vinculado por hardware ID"
+        if erro == 259:  # ERROR_NO_MORE_ITEMS: o ID nao consta no .inf
+            print("    (o .inf nao lista {}; selecionando o no de driver)".format(hwid))
+        else:
+            print("    (casamento por hardware ID falhou, erro {})".format(erro))
+
+    return instalar_via_inf(instance_id, caminho_inf, preferencia)
+
+
+def esperar_no_de_porta(vid, pid, tentativas=5):
+    """Aguarda o filho FTDIBUS\\ aparecer depois que o barramento sobe."""
+    for _ in range(tentativas):
+        _, portas, _ = classificar(enumerar(vid, pid))
+        presentes = [d for d in portas if d.get("Present")]
+        if presentes:
+            return presentes
+        rescan()
+    return []
+
+
 def corrigir(vid, pid, infs):
     """Refaz as duas camadas da pilha, de baixo para cima."""
     ok_total = True
 
+    if "ftdibus.inf" not in infs or "ftdiport.inf" not in infs:
+        print("Faltam .inf da FTDI no DriverStore.")
+        print("Instale o driver VCP da FTDI (ou o da Black Box) e rode de novo.")
+        return False
+
     # --- camada 1: barramento -------------------------------------------
-    dispositivos = enumerar(vid, pid)
-    barramento, _, _ = classificar(dispositivos)
+    barramento, _, _ = classificar(enumerar(vid, pid))
     presentes = [d for d in barramento if d.get("Present")]
 
     if not presentes:
@@ -345,66 +645,42 @@ def corrigir(vid, pid, infs):
         return False
 
     for d in presentes:
+        instance_id = d.get("InstanceId")
         servico = (d.get("Service") or "").upper()
         if servico == SERVICO_BARRAMENTO:
-            print("Camada de barramento ja correta em {}.".format(d.get("InstanceId")))
+            print("Camada de barramento ja correta em {}.".format(instance_id))
             continue
 
-        hwid = hardware_id_base(d, "USB\\")
-        if not hwid:
-            hwid = "USB\\VID_{}&PID_{}".format(vid, pid)
-
-        if "ftdibus.inf" not in infs:
-            print("ftdibus.inf nao encontrado no DriverStore.")
-            print("Instale o driver VCP da FTDI (ou o da Black Box) e rode de novo.")
-            return False
-
-        print("Forcando ftdibus.inf em {} ...".format(hwid))
-        ok, erro, _ = forcar_driver(hwid, infs["ftdibus.inf"])
-        if ok:
-            print("  camada de barramento vinculada.")
-        else:
-            print("  falhou (erro {}). Removendo o no e tentando de novo...".format(erro))
-            pnputil("/remove-device", d.get("InstanceId"))
-            rescan()
-            ok, erro, _ = forcar_driver(hwid, infs["ftdibus.inf"])
-            print("  {}".format("vinculada." if ok else "falhou de novo (erro {}).".format(erro)))
-            ok_total = ok_total and ok
+        print("Instalando ftdibus.inf em {} ...".format(instance_id))
+        ok, msg = vincular(
+            instance_id, infs["ftdibus.inf"],
+            hardware_id_base(d, "USB\\"), "USB Serial Converter",
+        )
+        print("  {}".format(msg))
+        ok_total = ok_total and ok
 
     rescan()
 
     # --- camada 2: porta COM --------------------------------------------
-    dispositivos = enumerar(vid, pid)
-    _, portas, _ = classificar(dispositivos)
-    portas_presentes = [d for d in portas if d.get("Present")]
-
+    portas_presentes = esperar_no_de_porta(vid, pid)
     if not portas_presentes:
-        print("O no de porta sob FTDIBUS\\ nao apareceu. Reconecte o conversor.")
+        print("O no de porta sob FTDIBUS\\ nao apareceu.")
+        print("Desconecte e reconecte o conversor, depois rode de novo.")
         return False
 
     for d in portas_presentes:
+        instance_id = d.get("InstanceId")
         servico = (d.get("Service") or "").upper()
         if servico == SERVICO_PORTA:
-            print("Camada de porta ja correta em {}.".format(d.get("InstanceId")))
+            print("Camada de porta ja correta em {}.".format(instance_id))
             continue
 
-        hwid = hardware_id_base(d, "FTDIBUS\\")
-        if not hwid:
-            hwid = "FTDIBUS\\COMPORT&VID_{}&PID_{}".format(vid, pid)
-
-        if "ftdiport.inf" not in infs:
-            print("ftdiport.inf nao encontrado no DriverStore.")
-            return False
-
-        # Um driver errado ja vinculado (usbhub, por exemplo) precisa sair antes.
-        if servico and servico != SERVICO_PORTA:
-            print("Removendo vinculo errado ({}) de {} ...".format(servico, d.get("InstanceId")))
-            pnputil("/remove-device", d.get("InstanceId"))
-            rescan()
-
-        print("Forcando ftdiport.inf em {} ...".format(hwid))
-        ok, erro, _ = forcar_driver(hwid, infs["ftdiport.inf"])
-        print("  {}".format("camada de porta vinculada." if ok else "falhou (erro {}).".format(erro)))
+        print("Instalando ftdiport.inf em {} ...".format(instance_id))
+        ok, msg = vincular(
+            instance_id, infs["ftdiport.inf"],
+            hardware_id_base(d, "FTDIBUS\\"), "USB Serial Port",
+        )
+        print("  {}".format(msg))
         ok_total = ok_total and ok
 
     rescan()
