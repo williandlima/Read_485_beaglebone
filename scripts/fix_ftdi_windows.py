@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""Diagnostica e corrige a pilha de drivers FTDI no Windows.
+
+Conversores USB/RS-485 com VID:PID de OEM (o padrao aqui e 0856:AC15, do
+Black Box SP390A-R2) nao constam nos arquivos .inf da FTDI, entao o Windows
+nao vincula o driver sozinho. Quando a vinculacao e forcada pela interface do
+Gerenciador de Dispositivos, e facil errar a camada: o driver de porta
+(FTSER2K) acaba instalado direto sobre o no USB cru, sem o driver de
+barramento (FTDIBUS) embaixo.
+
+O resultado e uma porta COM que abre, aceita write() e reporta "funcionando
+corretamente" -- mas nao emite nenhuma transferencia USB, porque o FTSER2K
+sozinho nao fala USB. Nenhum byte chega ao chip e o LED de TX nunca acende.
+
+A pilha correta tem duas camadas:
+
+    USB\\VID_xxxx&PID_yyyy\\<serie>            -> Service FTDIBUS  (barramento)
+      +- FTDIBUS\\VID_xxxx+PID_yyyy+<serie>A   -> Service FTSER2K  (porta COM)
+
+Este script enumera os nos via PnP, aponta qual camada esta errada e refaz a
+vinculacao chamando UpdateDriverForPlugAndPlayDevices (newdev.dll) com
+INSTALLFLAG_FORCE, usando os .inf assinados que ja estao no DriverStore. A
+assinatura digital e preservada -- o que se ignora e apenas a checagem de
+compatibilidade de hardware ID.
+
+Uso:
+    python fix_ftdi_windows.py                 # diagnostica, corrige e verifica
+    python fix_ftdi_windows.py --dry-run       # so diagnostica
+    python fix_ftdi_windows.py --vid 0403 --pid 6001
+    python fix_ftdi_windows.py --test COM8     # so o teste de loopback
+"""
+
+import argparse
+import ctypes
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+
+VID_PADRAO = "0856"
+PID_PADRAO = "AC15"
+
+SERVICO_BARRAMENTO = "FTDIBUS"
+SERVICO_PORTA = "FTSER2K"
+
+INSTALLFLAG_FORCE = 0x00000001
+
+PAYLOAD = b"\xAA\x55\x01\x02\x03\x04\xFF"
+
+
+# ---------------------------------------------------------------- utilidades
+
+
+def secao(titulo):
+    print()
+    print("=" * 68)
+    print(titulo)
+    print("=" * 68)
+
+
+def exigir_windows():
+    if os.name != "nt":
+        print("Este script so funciona no Windows.")
+        sys.exit(1)
+
+
+def e_admin():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def reabrir_como_admin():
+    """Relanca o script com elevacao (dispara o prompt do UAC)."""
+    params = " ".join('"{}"'.format(a) for a in sys.argv)
+    rc = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", sys.executable, params, None, 1
+    )
+    if rc <= 32:
+        print("Falha ao solicitar elevacao (codigo {}).".format(rc))
+        print("Abra o PowerShell como Administrador e rode o script de novo.")
+        sys.exit(1)
+    print("Uma janela elevada foi aberta. Acompanhe o resultado por la.")
+    sys.exit(0)
+
+
+def powershell(script):
+    """Roda um trecho de PowerShell e devolve a saida como texto."""
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
+def pnputil(*args):
+    proc = subprocess.run(
+        ["pnputil"] + list(args), capture_output=True, text=True
+    )
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+# ------------------------------------------------------------- enumeracao PnP
+
+
+def enumerar(vid, pid):
+    """Devolve os nos PnP que casam com o VID/PID informado."""
+    filtro = "*VID_{}*PID_{}*".format(vid, pid)
+    script = (
+        "Get-PnpDevice | Where-Object {{ $_.InstanceId -like '{}' }} | "
+        "Select-Object FriendlyName,InstanceId,Class,Service,Status,Present,"
+        "HardwareID | ConvertTo-Json -Depth 4"
+    ).format(filtro)
+
+    saida = powershell(script)
+    if not saida:
+        return []
+
+    try:
+        dados = json.loads(saida)
+    except json.JSONDecodeError:
+        print("Nao consegui interpretar a saida do PowerShell:")
+        print(saida)
+        return []
+
+    if isinstance(dados, dict):
+        dados = [dados]
+
+    for d in dados:
+        hw = d.get("HardwareID") or []
+        if isinstance(hw, str):
+            hw = [hw]
+        d["HardwareID"] = hw
+    return dados
+
+
+def classificar(dispositivos):
+    """Separa os nos em camada de barramento (USB\\) e camada de porta."""
+    barramento, portas, outros = [], [], []
+    for d in dispositivos:
+        iid = (d.get("InstanceId") or "").upper()
+        if iid.startswith("USB\\"):
+            barramento.append(d)
+        elif iid.startswith("FTDIBUS\\"):
+            portas.append(d)
+        else:
+            outros.append(d)
+    return barramento, portas, outros
+
+
+def mostrar(dispositivos):
+    if not dispositivos:
+        print("  (nenhum)")
+        return
+    for d in dispositivos:
+        presente = "presente" if d.get("Present") else "ausente"
+        print("  {}".format(d.get("FriendlyName") or "?"))
+        print("    InstanceId : {}".format(d.get("InstanceId")))
+        print("    Class      : {}".format(d.get("Class")))
+        print("    Service    : {}".format(d.get("Service") or "(nenhum)"))
+        print("    Status     : {} / {}".format(d.get("Status"), presente))
+
+
+def diagnosticar(barramento, portas):
+    """Avalia cada camada e devolve (lista_de_problemas, tudo_ok)."""
+    problemas = []
+
+    presentes = [d for d in barramento if d.get("Present")]
+    if not presentes:
+        problemas.append(
+            "Nenhum no USB do conversor esta presente. "
+            "Conecte o conversor antes de rodar o script."
+        )
+        return problemas, False
+
+    for d in presentes:
+        servico = (d.get("Service") or "").upper()
+        if servico != SERVICO_BARRAMENTO:
+            problemas.append(
+                "Camada de barramento errada em {}: Service={} (esperado {}).".format(
+                    d.get("InstanceId"), servico or "nenhum", SERVICO_BARRAMENTO
+                )
+            )
+
+    portas_presentes = [d for d in portas if d.get("Present")]
+    if not portas_presentes:
+        problemas.append(
+            "Nenhum no de porta sob FTDIBUS\\. A camada de porta nao existe."
+        )
+    for d in portas_presentes:
+        servico = (d.get("Service") or "").upper()
+        if servico != SERVICO_PORTA:
+            problemas.append(
+                "Camada de porta errada em {}: Service={} (esperado {}).".format(
+                    d.get("InstanceId"), servico or "nenhum", SERVICO_PORTA
+                )
+            )
+
+    # Uma porta COM pendurada direto no no USB e o sintoma classico.
+    for d in presentes:
+        if (d.get("Class") or "").upper() == "PORTS":
+            problemas.append(
+                "A porta COM esta vinculada direto ao no USB ({}). "
+                "O FTSER2K nao fala USB: a porta abre, aceita write() e nao "
+                "transmite nada.".format(d.get("InstanceId"))
+            )
+
+    return problemas, not problemas
+
+
+# ------------------------------------------------------------ correcao da pilha
+
+
+def localizar_infs():
+    """Acha ftdibus.inf e ftdiport.inf no DriverStore."""
+    raiz = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32",
+        "DriverStore",
+        "FileRepository",
+    )
+    achados = {}
+    for nome in ("ftdibus.inf", "ftdiport.inf"):
+        padrao = os.path.join(raiz, nome.replace(".inf", ".inf_*"), nome)
+        candidatos = sorted(glob.glob(padrao))
+        if candidatos:
+            achados[nome] = candidatos[-1]
+    return achados
+
+
+def forcar_driver(hardware_id, caminho_inf):
+    """Vincula um .inf a um hardware ID ignorando a checagem de compatibilidade."""
+    from ctypes import wintypes
+
+    newdev = ctypes.WinDLL("newdev.dll", use_last_error=True)
+    fn = newdev.UpdateDriverForPlugAndPlayDevicesW
+    fn.argtypes = [
+        wintypes.HWND,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    fn.restype = wintypes.BOOL
+
+    reiniciar = wintypes.BOOL(False)
+    ok = fn(None, hardware_id, caminho_inf, INSTALLFLAG_FORCE, ctypes.byref(reiniciar))
+    erro = 0 if ok else ctypes.get_last_error()
+    return bool(ok), erro, bool(reiniciar.value)
+
+
+def hardware_id_base(dispositivo, prefixo):
+    """Escolhe o hardware ID mais generico que comeca com o prefixo dado."""
+    candidatos = [
+        h for h in dispositivo.get("HardwareID", []) if h.upper().startswith(prefixo)
+    ]
+    if not candidatos:
+        return None
+    # O mais curto e o menos especifico (sem &REV_, sem numero de serie).
+    return sorted(candidatos, key=len)[0]
+
+
+def rescan():
+    pnputil("/scan-devices")
+    time.sleep(2)
+
+
+def corrigir(vid, pid, infs):
+    """Refaz as duas camadas da pilha, de baixo para cima."""
+    ok_total = True
+
+    # --- camada 1: barramento -------------------------------------------
+    dispositivos = enumerar(vid, pid)
+    barramento, _, _ = classificar(dispositivos)
+    presentes = [d for d in barramento if d.get("Present")]
+
+    if not presentes:
+        print("Conversor nao esta presente. Conecte-o e rode de novo.")
+        return False
+
+    for d in presentes:
+        servico = (d.get("Service") or "").upper()
+        if servico == SERVICO_BARRAMENTO:
+            print("Camada de barramento ja correta em {}.".format(d.get("InstanceId")))
+            continue
+
+        hwid = hardware_id_base(d, "USB\\")
+        if not hwid:
+            hwid = "USB\\VID_{}&PID_{}".format(vid, pid)
+
+        if "ftdibus.inf" not in infs:
+            print("ftdibus.inf nao encontrado no DriverStore.")
+            print("Instale o driver VCP da FTDI (ou o da Black Box) e rode de novo.")
+            return False
+
+        print("Forcando ftdibus.inf em {} ...".format(hwid))
+        ok, erro, _ = forcar_driver(hwid, infs["ftdibus.inf"])
+        if ok:
+            print("  camada de barramento vinculada.")
+        else:
+            print("  falhou (erro {}). Removendo o no e tentando de novo...".format(erro))
+            pnputil("/remove-device", d.get("InstanceId"))
+            rescan()
+            ok, erro, _ = forcar_driver(hwid, infs["ftdibus.inf"])
+            print("  {}".format("vinculada." if ok else "falhou de novo (erro {}).".format(erro)))
+            ok_total = ok_total and ok
+
+    rescan()
+
+    # --- camada 2: porta COM --------------------------------------------
+    dispositivos = enumerar(vid, pid)
+    _, portas, _ = classificar(dispositivos)
+    portas_presentes = [d for d in portas if d.get("Present")]
+
+    if not portas_presentes:
+        print("O no de porta sob FTDIBUS\\ nao apareceu. Reconecte o conversor.")
+        return False
+
+    for d in portas_presentes:
+        servico = (d.get("Service") or "").upper()
+        if servico == SERVICO_PORTA:
+            print("Camada de porta ja correta em {}.".format(d.get("InstanceId")))
+            continue
+
+        hwid = hardware_id_base(d, "FTDIBUS\\")
+        if not hwid:
+            hwid = "FTDIBUS\\COMPORT&VID_{}&PID_{}".format(vid, pid)
+
+        if "ftdiport.inf" not in infs:
+            print("ftdiport.inf nao encontrado no DriverStore.")
+            return False
+
+        # Um driver errado ja vinculado (usbhub, por exemplo) precisa sair antes.
+        if servico and servico != SERVICO_PORTA:
+            print("Removendo vinculo errado ({}) de {} ...".format(servico, d.get("InstanceId")))
+            pnputil("/remove-device", d.get("InstanceId"))
+            rescan()
+
+        print("Forcando ftdiport.inf em {} ...".format(hwid))
+        ok, erro, _ = forcar_driver(hwid, infs["ftdiport.inf"])
+        print("  {}".format("camada de porta vinculada." if ok else "falhou (erro {}).".format(erro)))
+        ok_total = ok_total and ok
+
+    rescan()
+    return ok_total
+
+
+def porta_com(vid, pid):
+    """Devolve o nome da porta COM criada pela pilha, se houver."""
+    dispositivos = enumerar(vid, pid)
+    for d in dispositivos:
+        if not d.get("Present"):
+            continue
+        if (d.get("Class") or "").upper() != "PORTS":
+            continue
+        nome = d.get("FriendlyName") or ""
+        if "(COM" in nome:
+            numero = nome.split("(COM")[1].split(")")[0]
+            return "COM" + numero
+    return None
+
+
+# ---------------------------------------------------------- teste de loopback
+
+
+def teste_loopback(porta, baud=9600):
+    """Escreve o payload e confere o eco. Exige jumper A-A / B-B no conversor."""
+    try:
+        import serial
+    except ImportError:
+        print("pyserial nao instalado neste Python. Rode: pip install pyserial")
+        return False
+
+    print("Abrindo {} a {} bps...".format(porta, baud))
+    try:
+        with serial.Serial(porta, baud, timeout=0.5) as ser:
+            for rts in (False, True):
+                ser.rts = rts
+                time.sleep(0.02)
+                ser.reset_input_buffer()
+                ser.write(PAYLOAD)
+                time.sleep(0.05)
+                eco = ser.read(len(PAYLOAD))
+                print("  RTS={}: recebido {} byte(s) {}".format(
+                    rts, len(eco), eco.hex(" ") if eco else ""))
+                if eco == PAYLOAD:
+                    print("  ECO OK -- a pilha esta transmitindo de verdade.")
+                    return True
+    except Exception as e:
+        print("  erro: {}".format(e))
+        return False
+
+    print("  sem eco. Se o LED TD piscou, a pilha esta OK e falta o jumper")
+    print("  (TDA- em RDA-, TDB+ em RDB+) ou o Echo do conversor esta desligado.")
+    return False
+
+
+# ---------------------------------------------------------------------- main
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description="Diagnostica e corrige a pilha de drivers FTDI no Windows."
+    )
+    p.add_argument("--vid", default=VID_PADRAO, help="VID em hex (padrao: %(default)s)")
+    p.add_argument("--pid", default=PID_PADRAO, help="PID em hex (padrao: %(default)s)")
+    p.add_argument("--dry-run", action="store_true", help="so diagnostica, nao corrige")
+    p.add_argument("--test", metavar="COMx", help="so roda o teste de loopback nessa porta")
+    p.add_argument("--baud", type=int, default=9600, help="baud do teste (padrao: %(default)s)")
+    args = p.parse_args()
+
+    exigir_windows()
+
+    if args.test:
+        secao("TESTE DE LOOPBACK")
+        sys.exit(0 if teste_loopback(args.test, args.baud) else 1)
+
+    vid = args.vid.upper().replace("0X", "")
+    pid = args.pid.upper().replace("0X", "")
+
+    if not args.dry_run and not e_admin():
+        print("Preciso de privilegio de administrador para religar os drivers.")
+        reabrir_como_admin()
+
+    secao("ESTADO ATUAL DA PILHA  (VID_{} PID_{})".format(vid, pid))
+    dispositivos = enumerar(vid, pid)
+    if not dispositivos:
+        print("Nenhum dispositivo com esse VID:PID foi encontrado.")
+        print("Conecte o conversor, ou informe outro par com --vid/--pid.")
+        sys.exit(1)
+
+    barramento, portas, outros = classificar(dispositivos)
+    print("\nCamada de barramento (nos USB\\):")
+    mostrar(barramento)
+    print("\nCamada de porta (nos FTDIBUS\\):")
+    mostrar(portas)
+    if outros:
+        print("\nOutros nos:")
+        mostrar(outros)
+
+    secao("DIAGNOSTICO")
+    problemas, tudo_ok = diagnosticar(barramento, portas)
+    if tudo_ok:
+        print("A pilha esta correta: FTDIBUS no no USB e FTSER2K sob FTDIBUS\\.")
+    else:
+        for i, msg in enumerate(problemas, 1):
+            print("{}. {}".format(i, msg))
+
+    if args.dry_run:
+        sys.exit(0 if tudo_ok else 1)
+
+    if not tudo_ok:
+        secao("CORRIGINDO")
+        infs = localizar_infs()
+        for nome, caminho in infs.items():
+            print("{}: {}".format(nome, caminho))
+        if not infs:
+            print("Nenhum .inf da FTDI no DriverStore.")
+            print("Instale o driver VCP da FTDI (ou o da Black Box) e rode de novo.")
+            sys.exit(1)
+        print()
+        corrigir(vid, pid, infs)
+
+        secao("ESTADO APOS A CORRECAO")
+        dispositivos = enumerar(vid, pid)
+        barramento, portas, _ = classificar(dispositivos)
+        print("\nCamada de barramento (nos USB\\):")
+        mostrar(barramento)
+        print("\nCamada de porta (nos FTDIBUS\\):")
+        mostrar(portas)
+
+        problemas, tudo_ok = diagnosticar(barramento, portas)
+        print()
+        if tudo_ok:
+            print("Pilha corrigida.")
+        else:
+            for i, msg in enumerate(problemas, 1):
+                print("{}. {}".format(i, msg))
+            print("\nSe algo persistir, desconecte e reconecte o conversor e rode de novo.")
+
+    com = porta_com(vid, pid)
+    if com:
+        secao("TESTE DE LOOPBACK EM {}".format(com))
+        print("Olhe o LED TD do conversor durante o teste.\n")
+        teste_loopback(com, args.baud)
+    else:
+        print("\nNenhuma porta COM ativa foi encontrada para testar.")
+
+    sys.exit(0 if tudo_ok else 1)
+
+
+if __name__ == "__main__":
+    main()
