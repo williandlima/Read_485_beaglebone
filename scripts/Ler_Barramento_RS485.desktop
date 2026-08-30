@@ -2,7 +2,7 @@
 Type=Application
 Name=Ler Barramento RS-485
 Comment=Abre o monitor RS-485 (bus_monitor.py), so no mouse
-Exec=/home/debian/Read_485_beaglebone/scripts/ler_barramento.sh
+Exec=xterm -e /home/debian/Read_485_beaglebone/scripts/ler_barramento.sh
 Icon=utilities-terminal
-Terminal=true
+Terminal=false
 Categories=Utility;
