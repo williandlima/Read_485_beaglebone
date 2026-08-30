@@ -3,6 +3,10 @@
 Leitura de RS-485 / Modbus RTU na BeagleBone, para engenharia reversa e
 integracao com dispositivos no barramento.
 
+> Já tem tudo configurado e só quer usar no dia a dia (ligar, ler a
+> tela, gravar em Excel)? Veja o **[Guia de Uso](GUIA_DE_USO.md)** —
+> este README aqui é a referência técnica de cada ferramenta.
+
 O projeto tem dois modos de uso:
 
 - **Leitura ativa (mestre Modbus)** — `src/modbus_reader.py`: le
@@ -274,6 +278,11 @@ no arquivo com um registro DEFAULT no momento em que a tecla foi
 apertada, para o arquivo não começar incompleto. O cabeçalho da tela
 mostra `Excel: ON eventos.xlsx` ou `Excel: OFF eventos.xlsx` conforme o
 estado atual.
+
+O arquivo fica salvo dentro da BeagleBone — para abrir no Excel de
+verdade, copie para o Windows. `scripts/baixar_eventos.bat` (rodado no
+notebook) faz isso com um duplo clique, sem precisar lembrar do
+comando `scp`; veja o [Guia de Uso](GUIA_DE_USO.md#6-trazer-o-excel-para-o-seu-notebook).
 
 O gerador (`legacy_py34/xlsx_writer.py`) nao depende de nenhuma
 biblioteca externa (nem `openpyxl`) — monta o `.xlsx` na mao com so a
