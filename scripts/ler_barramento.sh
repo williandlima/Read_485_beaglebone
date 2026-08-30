@@ -94,10 +94,17 @@ echo "Usando porta: $PORTA"
 # BeagleBone, Debian Jessie) trata um array vazio como variavel nao
 # definida sob 'set -u' e aborta com "unbound variable".
 set +e
-env PYTHONPATH="$RAIZ" python3 "$RAIZ/legacy_py34/bus_monitor.py" "$PORTA" ${ARGS[@]+"${ARGS[@]}"}
+# PYTHONFAULTHANDLER=1: se der segfault (codigo 139) de novo, o Python
+# imprime o traceback nativo (pilha de chamadas em C) antes de morrer,
+# em vez de so cair sem explicacao nenhuma.
+env PYTHONPATH="$RAIZ" PYTHONFAULTHANDLER=1 python3 "$RAIZ/legacy_py34/bus_monitor.py" "$PORTA" ${ARGS[@]+"${ARGS[@]}"}
 codigo=$?
 set -e
 
 if [[ $codigo -ne 0 ]]; then
-    falhar "bus_monitor.py terminou com codigo $codigo."
+    if [[ $codigo -eq 139 ]]; then
+        falhar "bus_monitor.py morreu com SEGMENTATION FAULT (codigo 139). Veja o traceback nativo acima/no log."
+    else
+        falhar "bus_monitor.py terminou com codigo $codigo."
+    fi
 fi
