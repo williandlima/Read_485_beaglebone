@@ -18,6 +18,7 @@ Mostra:
 Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
+    python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.xlsx
     (Q para sair)
 
 Com --log, so o que importa e gravado em texto simples, uma linha por
@@ -31,6 +32,13 @@ evento, de tres tipos:
 
 Repeticoes do mesmo valor nao sao gravadas. Se o arquivo ja existir, as
 linhas novas sao anexadas ao final.
+
+Com --xlsx, os mesmos eventos (mesmo criterio de --log) sao gravados
+numa planilha .xlsx de verdade, com uma coluna por campo -- pronta para
+abrir no Excel/LibreOffice/Google Sheets, filtrar e ordenar. Pode usar
+--log e --xlsx juntos. Diferente do --log, o --xlsx sempre reescreve o
+arquivo do zero a cada evento -- nao ha como "anexar" a um .xlsx
+existente de forma simples.
 """
 import argparse
 import curses
@@ -41,6 +49,7 @@ from collections import deque
 import serial
 
 from portdiag import OPEN_ERRORS, read_timeout_for, report_open_error
+from xlsx_writer import write_xlsx
 
 FUNCTION_NAMES = {
     0x01: "Read Coils",
@@ -202,7 +211,32 @@ def log_change(log_file, now, frame, default_payload):
     log_file.flush()
 
 
-def run(stdscr, ser, silence, port_desc, log=None):
+XLSX_HEADERS = ['Hora', 'Tipo', 'Slave', 'Funcao', 'Comando Default', 'Comando Atual']
+
+
+class XlsxLog(object):
+    """Acumula as linhas de evento em memoria e reescreve o .xlsx inteiro
+    a cada evento novo (mesmo criterio do --log: DEFAULT/MUDOU/VOLTOU com
+    CRC valido). Reescrever tudo a cada evento e desprezivel para o
+    volume de eventos de um barramento RS-485 (nao e um log byte a
+    byte), e evita ter que manipular um .zip existente incrementalmente."""
+
+    def __init__(self, path):
+        self.path = path
+        self.rows = []
+
+    def add(self, now, tipo, frame, default_payload=None):
+        when = time.strftime('%H:%M:%S', time.localtime(now))
+        atual = hexlify_spaced(frame['payload'])
+        default = hexlify_spaced(default_payload) if default_payload is not None else atual
+        self.rows.append([
+            when, tipo, frame['slave_id'],
+            function_name(frame['function_code']), default, atual,
+        ])
+        write_xlsx(self.path, XLSX_HEADERS, self.rows)
+
+
+def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
     curses.curs_set(0)
     has_color = curses.has_colors()
     if has_color:
@@ -258,7 +292,7 @@ def run(stdscr, ser, silence, port_desc, log=None):
                 key = (frame['slave_id'], frame['function_code'])
                 status = update_registry(registry, registry_order, frame, now)
                 events.appendleft((now, status, frame))
-                if log is not None and frame['crc_ok']:
+                if (log is not None or xlsx is not None) and frame['crc_ok']:
                     default_payload = defaults.get(key)
                     if default_payload is None:
                         # O primeiro quadro VALIDO desta combinacao define o
@@ -266,12 +300,21 @@ def run(stdscr, ser, silence, port_desc, log=None):
                         # primeiro quadro visto tinha CRC ruim, ele ja marcou a
                         # combinacao como conhecida sem definir default nenhum.
                         defaults[key] = frame['payload']
-                        log_default(log, now, frame)
+                        if log is not None:
+                            log_default(log, now, frame)
+                        if xlsx is not None:
+                            xlsx.add(now, 'DEFAULT', frame)
                     elif status == 'changed':
                         if frame['payload'] == default_payload:
-                            log_return(log, now, frame)
+                            if log is not None:
+                                log_return(log, now, frame)
+                            if xlsx is not None:
+                                xlsx.add(now, 'VOLTOU', frame)
                         else:
-                            log_change(log, now, frame, default_payload)
+                            if log is not None:
+                                log_change(log, now, frame, default_payload)
+                            if xlsx is not None:
+                                xlsx.add(now, 'MUDOU', frame, default_payload)
             else:
                 frame = {
                     'raw': bytes(buffer), 'slave_id': None,
@@ -369,6 +412,10 @@ def main():
                          help="Caminho de um arquivo de texto onde e gravado "
                               "o comando default de cada escravo/funcao e "
                               "toda mudanca em relacao a ele (anexa se ja existir)")
+    parser.add_argument('--xlsx', default=None,
+                         help="Caminho de uma planilha .xlsx onde os mesmos "
+                              "eventos do --log sao gravados, uma coluna por "
+                              "campo (sobrescreve o arquivo a cada evento)")
     args = parser.parse_args()
 
     silence = max(char_time_seconds(args.baudrate, 8, args.parity, args.stopbits) * 3.5, 0.005)
@@ -383,9 +430,10 @@ def main():
     port_desc = "%s @ %s bps" % (args.port, args.baudrate)
 
     log = open_log(args.log) if args.log else None
+    xlsx = XlsxLog(args.xlsx) if args.xlsx else None
 
     try:
-        curses.wrapper(run, ser, silence, port_desc, log)
+        curses.wrapper(run, ser, silence, port_desc, log, xlsx)
     finally:
         ser.close()
         if log is not None:

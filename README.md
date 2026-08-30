@@ -252,6 +252,28 @@ Sao tres tipos de linha:
 
 Se o arquivo ja existir, as linhas novas sao anexadas ao final.
 
+### Exportar para Excel (--xlsx)
+
+Os mesmos eventos do `--log` (mesmo criterio: DEFAULT/MUDOU/VOLTOU com
+CRC valido) tambem podem ser gravados numa planilha `.xlsx` de verdade,
+pronta para abrir no Excel/LibreOffice/Google Sheets:
+
+```bash
+python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.xlsx
+```
+
+Colunas: Hora, Tipo, Slave, Funcao, Comando Default, Comando Atual — uma
+linha por evento. Pode usar `--log` e `--xlsx` ao mesmo tempo.
+
+O gerador (`legacy_py34/xlsx_writer.py`) nao depende de nenhuma
+biblioteca externa (nem `openpyxl`) — monta o `.xlsx` na mao com so a
+biblioteca padrao do Python (`.xlsx` e apenas um `.zip` com XML dentro),
+pelo mesmo motivo do pyserial estar vendorizado: no precisa de
+`pip`/internet na BeagleBone. Diferente do `--log`, que so anexa linhas
+novas, o `--xlsx` reescreve o arquivo inteiro a cada evento (não da para
+"anexar" a um `.zip` existente de forma simples) — desprezivel para o
+volume de eventos de um barramento RS-485.
+
 ### Testar sem hardware (legacy_py34/simulate_bus.py)
 
 Gera trafego Modbus RTU valido (CRC correto) em uma porta serial, com um
@@ -374,6 +396,9 @@ PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
 
 # Idem, gravando so o default e as mudancas em texto
 PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
+
+# Idem, exportando os mesmos eventos para uma planilha .xlsx
+PYTHONPATH=. python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.xlsx
 
 # Testar sem hardware: ponte de portas virtuais (alternativa ao socat)
 PYTHONPATH=. python3 -u legacy_py34/ptybridge.py > /tmp/bridge.log 2>&1 &
