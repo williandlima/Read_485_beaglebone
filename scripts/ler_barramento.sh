@@ -19,6 +19,13 @@ set -euo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$RAIZ"
 
+# Alguns caminhos de lancamento (clique duplo via gerenciador de
+# arquivos, associacao de MIME type com um terminal) nao propagam TERM
+# para o processo filho. Sem TERM, o curses do Python nao acha o
+# terminfo e falha com "setupterm: could not find terminal" antes
+# mesmo de desenhar a primeira tela.
+export TERM="${TERM:-xterm}"
+
 # Quando aberto por clique duplo (Xterm etc.), a janela fecha sozinha
 # assim que o script termina -- se der erro antes de chegar no monitor,
 # ninguem consegue ler a mensagem a tempo. Grava tudo num log e, em
