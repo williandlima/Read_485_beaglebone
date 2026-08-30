@@ -223,7 +223,9 @@ modulo `curses` (ja vem no Python padrao).
 ```bash
 python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600
 ```
-`Q` para sair.
+`Q` para sair, `X` liga/desliga a gravação em Excel (veja abaixo), `H`
+ou `?` mostra uma tela de ajuda com as teclas e o significado de
+NOVO/MUDOU dentro do próprio programa.
 
 Para guardar so o que importa — quando cada escravo/funcao apareceu
 pela primeira vez (o "comando default" daquela combinacao) e toda vez

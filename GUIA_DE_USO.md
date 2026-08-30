@@ -23,7 +23,7 @@ Na área de trabalho da BeagleBone, dê **duplo clique** no ícone
 Abre uma janela de terminal com a interface do monitor:
 
 ```
-RS-485 Monitor - /dev/ttyUSB0 @ 9600 bps  (Q sai, X liga/desliga Excel)
+RS-485 Monitor - /dev/ttyUSB0 @ 9600 bps  (Q sai, X Excel, H ajuda)
 Excel: OFF eventos.xlsx
 --------------------------------------------------------------------
 DISPOSITIVOS CONHECIDOS
@@ -35,6 +35,11 @@ EVENTOS RECENTES
 ```
 
 Se não abrir nada visível, veja a seção **Problemas comuns** abaixo.
+
+**Esqueceu algum atalho?** Aperte **`H`** (ou `?`) a qualquer momento —
+abre uma tela de ajuda dentro do próprio programa, com as teclas e o
+significado de NOVO/MUDOU. Aperte `H` de novo (ou `Q`) para voltar ao
+monitor.
 
 ## 3. Ler a tela
 

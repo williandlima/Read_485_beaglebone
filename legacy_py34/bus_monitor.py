@@ -19,7 +19,7 @@ Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.xlsx
-    (Q para sair, X liga/desliga a gravacao em Excel a qualquer momento)
+    (Q para sair, X liga/desliga a gravacao em Excel, H mostra ajuda)
 
 Com --log, so o que importa e gravado em texto simples, uma linha por
 evento, de tres tipos:
@@ -290,11 +290,14 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
 
     buffer = bytearray()
     last_byte_time = None
+    mostrar_ajuda = False
 
     while True:
         ch = stdscr.getch()
         if ch in (ord('q'), ord('Q')):
             break
+        if ch in (ord('h'), ord('H'), ord('?')):
+            mostrar_ajuda = not mostrar_ajuda
         if ch in (ord('x'), ord('X')):
             if xlsx is None:
                 xlsx = XlsxLog(xlsx_path)
@@ -354,9 +357,46 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
             buffer = bytearray()
             last_byte_time = None
 
-        xlsx_status = "ON  %s" % xlsx_path if xlsx is not None else "OFF %s" % xlsx_path
-        draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
-             attr_new, attr_changed, attr_bad_crc, attr_header)
+        if mostrar_ajuda:
+            draw_help(stdscr, attr_header)
+        else:
+            xlsx_status = "ON  %s" % xlsx_path if xlsx is not None else "OFF %s" % xlsx_path
+            draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
+                 attr_new, attr_changed, attr_bad_crc, attr_header)
+
+
+HELP_LINES = [
+    "AJUDA - RS-485 Monitor    (aperte H, ? ou Q para voltar)",
+    "",
+    "TECLAS",
+    "  Q       sai do monitor",
+    "  X       liga/desliga a gravacao dos eventos em eventos.xlsx",
+    "  H ou ?  mostra/esconde esta ajuda",
+    "",
+    "COMO LER A TELA",
+    "  DISPOSITIVOS CONHECIDOS  combinacoes (escravo+funcao) ja vistas,",
+    "                           com ultimo valor, quantas vezes e ha quanto",
+    "  *** NOVO ***             combinacao nunca vista antes",
+    "  >>> MUDOU <<<            valor diferente do que ja era conhecido",
+    "  EVENTOS RECENTES         historico detalhado (payload em hex)",
+    "",
+    "SOBRE O EXCEL (tecla X)",
+    "  O .xlsx fica salvo na BeagleBone. Para abrir no Excel de verdade,",
+    "  copie para o computador: scripts/baixar_eventos.bat (Windows), ou",
+    "  scp. Passo a passo completo: GUIA_DE_USO.md no repositorio.",
+    "",
+    "(H, ? ou Q para voltar)",
+]
+
+
+def draw_help(stdscr, attr_header):
+    stdscr.erase()
+    h, w = stdscr.getmaxyx()
+    for i, line in enumerate(HELP_LINES):
+        if i >= h - 1:
+            break
+        attr = attr_header if i == 0 else 0
+        safe_addstr(stdscr, i, 0, line, attr)
 
 
 def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
@@ -364,7 +404,7 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
     stdscr.erase()
     h, w = stdscr.getmaxyx()
 
-    safe_addstr(stdscr, 0, 0, "RS-485 Monitor - %s  (Q sai, X liga/desliga Excel)" % port_desc,
+    safe_addstr(stdscr, 0, 0, "RS-485 Monitor - %s  (Q sai, X Excel, H ajuda)" % port_desc,
                 attr_header)
     safe_addstr(stdscr, 1, 0, "Excel: %s" % xlsx_status,
                 (attr_new if xlsx_status.startswith("ON") else 0))
