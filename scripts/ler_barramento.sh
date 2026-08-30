@@ -65,4 +65,7 @@ if [[ -z "$PORTA" || ! -e "$PORTA" ]]; then
 fi
 
 echo "Usando porta: $PORTA"
-exec env PYTHONPATH="$RAIZ" python3 "$RAIZ/legacy_py34/bus_monitor.py" "$PORTA" "${ARGS[@]}"
+# ${ARGS[@]+"${ARGS[@]}"} em vez de "${ARGS[@]}": bash < 4.4 (ex.: o desta
+# BeagleBone, Debian Jessie) trata um array vazio como variavel nao
+# definida sob 'set -u' e aborta com "unbound variable".
+exec env PYTHONPATH="$RAIZ" python3 "$RAIZ/legacy_py34/bus_monitor.py" "$PORTA" ${ARGS[@]+"${ARGS[@]}"}
