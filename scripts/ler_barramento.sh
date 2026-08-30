@@ -19,6 +19,22 @@ set -euo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$RAIZ"
 
+# Quando aberto por clique duplo (Xterm etc.), a janela fecha sozinha
+# assim que o script termina -- se der erro antes de chegar no monitor,
+# ninguem consegue ler a mensagem a tempo. Grava tudo num log e, em
+# qualquer saida com erro, pausa por um tempo generoso antes de fechar.
+LOG="$RAIZ/ler_barramento.log"
+exec > >(tee -a "$LOG") 2>&1
+echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"
+
+falhar() {
+    echo "ERRO: $1"
+    echo "(log completo em $LOG)"
+    echo "Essa janela fecha sozinha em 2 minutos -- ou feche manualmente."
+    sleep 120
+    exit 1
+}
+
 VID="0856"
 PID="ac15"
 
@@ -58,14 +74,23 @@ if [[ -z "$PORTA" || ! -e "$PORTA" ]]; then
 fi
 
 if [[ -z "$PORTA" || ! -e "$PORTA" ]]; then
-    echo "Ainda sem porta serial disponivel."
-    echo "Confira: lsusb  (o conversor aparece?)"
-    echo "         dmesg | tail -20  (o kernel reconheceu o dispositivo?)"
-    exit 1
+    falhar "Nenhuma porta serial disponivel. Confira: o conversor esta conectado? Aparece em 'lsusb'?"
 fi
 
 echo "Usando porta: $PORTA"
+# Sem 'exec' aqui de proposito: se bus_monitor.py falhar (crash, porta
+# ocupada, etc.), precisamos que o bash continue vivo depois pra chamar
+# falhar() e segurar a janela -- com 'exec' o processo seria substituido
+# e a janela fecharia junto com o erro, sem tempo de leitura.
+#
 # ${ARGS[@]+"${ARGS[@]}"} em vez de "${ARGS[@]}": bash < 4.4 (ex.: o desta
 # BeagleBone, Debian Jessie) trata um array vazio como variavel nao
 # definida sob 'set -u' e aborta com "unbound variable".
-exec env PYTHONPATH="$RAIZ" python3 "$RAIZ/legacy_py34/bus_monitor.py" "$PORTA" ${ARGS[@]+"${ARGS[@]}"}
+set +e
+env PYTHONPATH="$RAIZ" python3 "$RAIZ/legacy_py34/bus_monitor.py" "$PORTA" ${ARGS[@]+"${ARGS[@]}"}
+codigo=$?
+set -e
+
+if [[ $codigo -ne 0 ]]; then
+    falhar "bus_monitor.py terminou com codigo $codigo."
+fi
