@@ -169,6 +169,37 @@ existir, e apontar o `PYTHONPATH` certo para rodar `bus_monitor.py`.
 Qualquer argumento além da porta é repassado direto para o
 `bus_monitor.py` (mesmas opções: `--baudrate`, `--parity`, `--log`).
 
+## Operação autônoma na tela HDMI (scripts/setup_standalone_kiosk.sh)
+
+Para rodar a BeagleBone sozinha — tela HDMI + mouse, sem notebook nem
+teclado — faltam duas configurações que são do **sistema**, não do
+projeto, e por isso não sobreviveriam a uma reinstalação se ficassem só
+na memória de quem configurou:
+
+1. **Login automático (LightDM)**: sem isso, todo reboot para na tela
+   de senha, e sem teclado local não dá para digitar.
+2. **Internet automática pela `usb0`**: se o notebook do outro lado do
+   cabo estiver compartilhando internet via ICS (Compartilhamento de
+   Conexão do Windows), a BeagleBone consegue `git pull` sozinha depois
+   de um reboot — sem isso, o IP/rota/DNS do ICS (sempre
+   `192.168.137.0/24`) se perdem a cada reinicialização e precisam ser
+   refeitos na mão.
+
+```bash
+sudo ./scripts/setup_standalone_kiosk.sh
+```
+
+Idempotente — pode rodar de novo a qualquer momento sem duplicar nada.
+Depois, para ver o app: duplo clique no ícone **"Ler Barramento
+RS-485"** na área de trabalho (copie `scripts/Ler_Barramento_RS485.desktop`
+para `~/Desktop/` se ele ainda não estiver lá) — abre um `xterm` e roda
+o monitor, sem precisar de terminal nem digitar nada.
+
+Se o clique duplo não fizer nada visível, veja `ler_barramento.log` na
+raiz do projeto (criado pelo `ler_barramento.sh`) — ele grava tudo que
+o script imprime, e qualquer saída com erro fica na tela por 2 minutos
+antes de fechar sozinha, em vez de sumir na hora.
+
 ## Monitor visual do barramento (legacy_py34/bus_monitor.py)
 
 Interface em texto (curses, roda direto no terminal via SSH) que mostra
