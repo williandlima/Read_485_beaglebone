@@ -265,6 +265,16 @@ python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.x
 Colunas: Hora, Tipo, Slave, Funcao, Comando Default, Comando Atual — uma
 linha por evento. Pode usar `--log` e `--xlsx` ao mesmo tempo.
 
+Também dá para ligar/desligar a gravação em Excel **de dentro do
+monitor**, a qualquer momento, apertando **`X`** — sem precisar
+reiniciar com `--xlsx` na linha de comando. Se nenhum `--xlsx` foi
+passado, apertar `X` pela primeira vez cria `eventos.xlsx` no diretório
+atual; se já havia dispositivos conhecidos antes de ligar, eles entram
+no arquivo com um registro DEFAULT no momento em que a tecla foi
+apertada, para o arquivo não começar incompleto. O cabeçalho da tela
+mostra `Excel: ON eventos.xlsx` ou `Excel: OFF eventos.xlsx` conforme o
+estado atual.
+
 O gerador (`legacy_py34/xlsx_writer.py`) nao depende de nenhuma
 biblioteca externa (nem `openpyxl`) — monta o `.xlsx` na mao com so a
 biblioteca padrao do Python (`.xlsx` e apenas um `.zip` com XML dentro),

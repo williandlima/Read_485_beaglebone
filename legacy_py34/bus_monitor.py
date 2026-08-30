@@ -19,7 +19,7 @@ Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.xlsx
-    (Q para sair)
+    (Q para sair, X liga/desliga a gravacao em Excel a qualquer momento)
 
 Com --log, so o que importa e gravado em texto simples, uma linha por
 evento, de tres tipos:
@@ -39,6 +39,15 @@ abrir no Excel/LibreOffice/Google Sheets, filtrar e ordenar. Pode usar
 --log e --xlsx juntos. Diferente do --log, o --xlsx sempre reescreve o
 arquivo do zero a cada evento -- nao ha como "anexar" a um .xlsx
 existente de forma simples.
+
+A gravacao em Excel tambem pode ser ligada/desligada a qualquer momento
+com a tecla X, sem precisar reiniciar o programa -- util para so
+comecar a gravar quando algo interessante começar a acontecer no
+barramento. Se --xlsx nao foi passado na linha de comando, apertar X
+cria eventos.xlsx no diretorio atual; se ja tinha uma combinacao
+escravo/funcao conhecida antes de ligar, ela entra no arquivo com um
+registro DEFAULT no momento em que X foi apertado, para o arquivo nao
+comecar incompleto.
 """
 import argparse
 import curses
@@ -236,6 +245,9 @@ class XlsxLog(object):
         write_xlsx(self.path, XLSX_HEADERS, self.rows)
 
 
+DEFAULT_XLSX_PATH = "eventos.xlsx"
+
+
 def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
     curses.curs_set(0)
     has_color = curses.has_colors()
@@ -272,6 +284,10 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
     events = deque(maxlen=MAX_EVENTS)
     defaults = {}
 
+    # Caminho lembrado mesmo com a gravacao desligada, so para mostrar na
+    # tela qual arquivo seria usado se a tecla X for apertada de novo.
+    xlsx_path = xlsx.path if xlsx is not None else DEFAULT_XLSX_PATH
+
     buffer = bytearray()
     last_byte_time = None
 
@@ -279,6 +295,20 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
         ch = stdscr.getch()
         if ch in (ord('q'), ord('Q')):
             break
+        if ch in (ord('x'), ord('X')):
+            if xlsx is None:
+                xlsx = XlsxLog(xlsx_path)
+                xlsx_path = xlsx.path
+                now = time.time()
+                # Semeia com os defaults ja conhecidos, para o arquivo nao
+                # comecar faltando os dispositivos vistos antes de ligar.
+                for key, payload in defaults.items():
+                    slave_id, function_code = key
+                    frame = {'slave_id': slave_id, 'function_code': function_code,
+                             'payload': payload}
+                    xlsx.add(now, 'DEFAULT', frame)
+            else:
+                xlsx = None
 
         chunk = ser.read(256)
         now = time.time()
@@ -324,23 +354,27 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
             buffer = bytearray()
             last_byte_time = None
 
-        draw(stdscr, registry, registry_order, events, now, port_desc,
+        xlsx_status = "ON  %s" % xlsx_path if xlsx is not None else "OFF %s" % xlsx_path
+        draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
              attr_new, attr_changed, attr_bad_crc, attr_header)
 
 
-def draw(stdscr, registry, registry_order, events, now, port_desc,
+def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
          attr_new, attr_changed, attr_bad_crc, attr_header):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
 
-    safe_addstr(stdscr, 0, 0, "RS-485 Monitor - %s  (Q sai)" % port_desc, attr_header)
-    safe_addstr(stdscr, 1, 0, "-" * (w - 1))
-    safe_addstr(stdscr, 2, 0, "DISPOSITIVOS CONHECIDOS", attr_header)
+    safe_addstr(stdscr, 0, 0, "RS-485 Monitor - %s  (Q sai, X liga/desliga Excel)" % port_desc,
+                attr_header)
+    safe_addstr(stdscr, 1, 0, "Excel: %s" % xlsx_status,
+                (attr_new if xlsx_status.startswith("ON") else 0))
+    safe_addstr(stdscr, 2, 0, "-" * (w - 1))
+    safe_addstr(stdscr, 3, 0, "DISPOSITIVOS CONHECIDOS", attr_header)
     header = "%-6s %-28s %-24s %5s  %-6s" % ("SLAVE", "FUNCAO", "PAYLOAD", "QTD", "HA")
-    safe_addstr(stdscr, 3, 0, header, curses.A_UNDERLINE)
+    safe_addstr(stdscr, 4, 0, header, curses.A_UNDERLINE)
 
-    max_device_rows = max(3, (h - 8) // 2)
-    row = 4
+    max_device_rows = max(3, (h - 9) // 2)
+    row = 5
     drawn = 0
     for key in registry_order:
         if drawn >= max_device_rows:
