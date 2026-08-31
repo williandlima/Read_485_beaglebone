@@ -210,10 +210,28 @@ Interface em texto (curses, roda direto no terminal via SSH) que mostra
 quais dispositivos/comandos estao presentes no barramento e destaca em
 tempo real:
 
-- **NOVO** — combinacao (escravo, funcao) nunca vista antes
+- **NOVO** — combinacao (escravo, funcao, direcao) nunca vista antes
 - **MUDOU** — combinacao ja conhecida com um payload diferente do
   anterior (ex.: uma chave/sensor mudou de estado e um novo comando
   apareceu no barramento)
+
+### Pedido do mestre vs. resposta do escravo (coluna DIR)
+
+O sniffer é passivo — não sabe de antemão quem é o mestre e quem é o
+escravo, e o Modbus RTU não marca isso no próprio quadro (pedido e
+resposta usam o mesmo endereço de escravo e a mesma função). A coluna
+**DIR** (`REQ`/`RESP`) resolve isso por **alternância**: o primeiro
+quadro de cada combinação (escravo, função) é tratado como pedido do
+mestre, o próximo como resposta do escravo, e segue alternando. Isso
+faz pedido e resposta aparecerem como **duas linhas separadas** na
+tabela (em vez de uma sobrescrever a outra) e evita que `MUDOU` dispare
+a cada ciclo só porque pedido e resposta têm payloads diferentes por
+natureza — agora só dispara quando o valor de verdade muda.
+
+Limitação honesta: se algum quadro se perder por ruído na linha, a
+alternância pode ficar invertida até se autocorrigir (o que costuma
+acontecer sozinho no próximo ciclo pergunta→resposta). Também assume
+um único mestre no barramento — o cenário normal do Modbus RTU.
 
 Escrito em sintaxe compativel com Python 3.4+ (sem f-strings, sem
 dataclasses) porque BeagleBones com imagens antigas (Debian Jessie,
@@ -243,10 +261,13 @@ Bloco de Notas do Windows, aparecem como codigos de escape ao redor do
 valor, mas o texto continua legivel):
 
 ```
-01:35:04  DEFAULT   Slave 2  Read Holding Registers    comando=02 00 00
-01:35:06  MUDOU     Slave 2  Read Holding Registers    default=02 00 00  novo=02 00 01
-01:35:09  VOLTOU    Slave 2  Read Holding Registers    comando=02 00 00
+01:35:04  DEFAULT   Slave 2  RESP  Read Holding Registers    comando=02 00 00
+01:35:06  MUDOU     Slave 2  RESP  Read Holding Registers    default=02 00 00  novo=02 00 01
+01:35:09  VOLTOU    Slave 2  RESP  Read Holding Registers    comando=02 00 00
 ```
+
+(`REQ`/`RESP` é a coluna de direção — veja acima "Pedido do mestre vs.
+resposta do escravo".)
 
 Sao tres tipos de linha:
 
@@ -268,7 +289,7 @@ pronta para abrir no Excel/LibreOffice/Google Sheets:
 python3 legacy_py34/bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --xlsx eventos.xlsx
 ```
 
-Colunas: Hora, Tipo, Slave, Funcao, Comando Default, Comando Atual — uma
+Colunas: Hora, Tipo, Slave, Direção, Funcao, Comando Default, Comando Atual — uma
 linha por evento. Pode usar `--log` e `--xlsx` ao mesmo tempo.
 
 Também dá para ligar/desligar a gravação em Excel **de dentro do

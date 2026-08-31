@@ -7,13 +7,25 @@ imagens antigas, sem precisar instalar nada alem do pyserial.
 
 Mostra:
   - uma tabela de "quem esta no barramento": um registro por combinacao
-    (endereco do escravo, codigo de funcao), com o ultimo payload visto,
-    quantas vezes apareceu e ha quanto tempo;
+    (endereco do escravo, codigo de funcao, direcao), com o ultimo
+    payload visto, quantas vezes apareceu e ha quanto tempo;
   - destaque quando aparece uma combinacao NUNCA vista antes (NOVO), ou
     quando uma combinacao ja conhecida aparece com um payload DIFERENTE
     do anterior (MUDOU) - por exemplo, quando uma chave/sensor muda de
     estado e um novo comando aparece no barramento;
   - um log de eventos recentes, mais completo, abaixo da tabela.
+
+O sniffer e passivo: nao sabe de antemao quem no barramento e o mestre
+e quem e o escravo, e o Modbus RTU nao marca isso no proprio quadro (o
+pedido e a resposta usam o mesmo endereco de escravo e mesma funcao).
+A coluna DIR (REQ/RESP) e decidida por alternancia -- o primeiro
+quadro de cada combinacao (escravo, funcao) e sempre tratado como
+pedido do mestre, o proximo como resposta do escravo, e assim por
+diante (calcular_direcao()). Isso separa pedido e resposta em duas
+linhas da tabela em vez de uma sobrescrever a outra, e evita que a
+tabela mostre MUDOU a cada ciclo so por alternar entre os dois (que
+quase sempre tem payloads diferentes por natureza, nao por o valor
+real ter mudado).
 
 Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
@@ -144,12 +156,43 @@ def safe_addstr(win, y, x, text, attr=0):
         pass
 
 
-def update_registry(registry, registry_order, frame, now):
+def calcular_direcao(proxima_direcao, frame):
+    """Decide se este quadro e um REQ (pedido do mestre) ou RESP (resposta
+    do escravo), por alternancia.
+
+    O Modbus RTU nao marca a direcao no proprio quadro -- mestre e escravo
+    usam o mesmo (endereco, funcao) tanto no pedido quanto na resposta. A
+    unica forma de distinguir sem decodificar o significado especifico de
+    cada funcao (o que teria casos ambiguos -- ex.: a resposta de "escrever
+    registrador unico" e byte a byte identica ao pedido) e pela ordem de
+    chegada: o primeiro quadro de uma combinacao e sempre um pedido, o
+    proximo e sempre a resposta a ele, e assim por diante.
+
+    Suposicoes: um so mestre no barramento, sem quadros perdidos/corrompidos
+    a ponto de derrubar a alternancia, sem broadcasts (endereco 0, que nao
+    gera resposta). Se algum quadro for perdido por ruido na linha, a
+    alternancia pode ficar invertida ate a proxima operação -- geralmente
+    a proxima leitura ja corrige sozinha porque master pede e escravo
+    responde, retomando a fase certa.
+    """
+    base_key = (frame['slave_id'], frame['function_code'])
+    direcao = proxima_direcao.get(base_key, 'REQ')
+    proxima_direcao[base_key] = 'RESP' if direcao == 'REQ' else 'REQ'
+    return direcao
+
+
+def update_registry(registry, registry_order, frame, now, direcao):
     """Atualiza o registro de dispositivos conhecidos com um novo quadro.
+
+    'direcao' ('REQ' ou 'RESP') entra na chave do registro, para o pedido
+    do mestre e a resposta do escravo aparecerem como duas linhas
+    separadas na tabela, em vez de uma sobrescrever a outra -- as duas
+    normalmente tem o mesmo (escravo, funcao), so o payload e diferente
+    (veja calcular_direcao() para como a direcao e decidida).
 
     Retorna a string de status ('new', 'changed' ou None) para este quadro.
     """
-    key = (frame['slave_id'], frame['function_code'])
+    key = (frame['slave_id'], frame['function_code'], direcao)
     prev = registry.get(key)
     status = None
     if prev is None:
@@ -180,47 +223,47 @@ def open_log(path):
     return open(path, 'a')
 
 
-def log_default(log_file, now, frame):
+def log_default(log_file, now, frame, direcao):
     """Grava a linha que define o comando default de um escravo/funcao
     (a primeira vez que ele aparece no barramento)."""
     when = time.strftime('%H:%M:%S', time.localtime(now))
-    line = "%s  DEFAULT   Slave %d  %-24s  comando=%s%s%s\n" % (
-        when, frame['slave_id'], function_name(frame['function_code']),
+    line = "%s  DEFAULT   Slave %d  %-4s  %-24s  comando=%s%s%s\n" % (
+        when, frame['slave_id'], direcao, function_name(frame['function_code']),
         ANSI_GREEN, hexlify_spaced(frame['payload']), ANSI_RESET)
     log_file.write(line)
     log_file.flush()
 
 
-def log_return(log_file, now, frame):
+def log_return(log_file, now, frame, direcao):
     """Grava quando o payload volta a ser exatamente o comando default.
 
     Sem isso a linha sairia como MUDOU com 'novo' igual ao 'default', o
     que se le como uma contradicao.
     """
     when = time.strftime('%H:%M:%S', time.localtime(now))
-    line = "%s  VOLTOU    Slave %d  %-24s  comando=%s%s%s\n" % (
-        when, frame['slave_id'], function_name(frame['function_code']),
+    line = "%s  VOLTOU    Slave %d  %-4s  %-24s  comando=%s%s%s\n" % (
+        when, frame['slave_id'], direcao, function_name(frame['function_code']),
         ANSI_GREEN, hexlify_spaced(frame['payload']), ANSI_RESET)
     log_file.write(line)
     log_file.flush()
 
 
-def log_change(log_file, now, frame, default_payload):
+def log_change(log_file, now, frame, default_payload, direcao):
     """Grava a linha de uma mudanca: comando default vs comando novo.
 
     O comando novo aparece em amarelo (codigo ANSI) para se destacar
     quando o arquivo e visto com 'cat' no terminal.
     """
     when = time.strftime('%H:%M:%S', time.localtime(now))
-    line = "%s  MUDOU     Slave %d  %-24s  default=%s  novo=%s%s%s\n" % (
-        when, frame['slave_id'], function_name(frame['function_code']),
+    line = "%s  MUDOU     Slave %d  %-4s  %-24s  default=%s  novo=%s%s%s\n" % (
+        when, frame['slave_id'], direcao, function_name(frame['function_code']),
         hexlify_spaced(default_payload),
         ANSI_YELLOW, hexlify_spaced(frame['payload']), ANSI_RESET)
     log_file.write(line)
     log_file.flush()
 
 
-XLSX_HEADERS = ['Hora', 'Tipo', 'Slave', 'Funcao', 'Comando Default', 'Comando Atual']
+XLSX_HEADERS = ['Hora', 'Tipo', 'Slave', 'Direcao', 'Funcao', 'Comando Default', 'Comando Atual']
 
 
 class XlsxLog(object):
@@ -234,12 +277,12 @@ class XlsxLog(object):
         self.path = path
         self.rows = []
 
-    def add(self, now, tipo, frame, default_payload=None):
+    def add(self, now, tipo, frame, direcao, default_payload=None):
         when = time.strftime('%H:%M:%S', time.localtime(now))
         atual = hexlify_spaced(frame['payload'])
         default = hexlify_spaced(default_payload) if default_payload is not None else atual
         self.rows.append([
-            when, tipo, frame['slave_id'],
+            when, tipo, frame['slave_id'], direcao,
             function_name(frame['function_code']), default, atual,
         ])
         write_xlsx(self.path, XLSX_HEADERS, self.rows)
@@ -283,6 +326,7 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
     registry_order = []
     events = deque(maxlen=MAX_EVENTS)
     defaults = {}
+    proxima_direcao = {}
 
     # Caminho lembrado mesmo com a gravacao desligada, so para mostrar na
     # tela qual arquivo seria usado se a tecla X for apertada de novo.
@@ -306,10 +350,10 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
                 # Semeia com os defaults ja conhecidos, para o arquivo nao
                 # comecar faltando os dispositivos vistos antes de ligar.
                 for key, payload in defaults.items():
-                    slave_id, function_code = key
+                    slave_id, function_code, direcao = key
                     frame = {'slave_id': slave_id, 'function_code': function_code,
                              'payload': payload}
-                    xlsx.add(now, 'DEFAULT', frame)
+                    xlsx.add(now, 'DEFAULT', frame, direcao)
             else:
                 xlsx = None
 
@@ -322,9 +366,10 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
         elif buffer and last_byte_time is not None and (now - last_byte_time) >= silence:
             frame = parse_frame(bytes(buffer))
             if frame is not None:
-                key = (frame['slave_id'], frame['function_code'])
-                status = update_registry(registry, registry_order, frame, now)
-                events.appendleft((now, status, frame))
+                direcao = calcular_direcao(proxima_direcao, frame)
+                key = (frame['slave_id'], frame['function_code'], direcao)
+                status = update_registry(registry, registry_order, frame, now, direcao)
+                events.appendleft((now, status, frame, direcao))
                 if (log is not None or xlsx is not None) and frame['crc_ok']:
                     default_payload = defaults.get(key)
                     if default_payload is None:
@@ -334,26 +379,26 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
                         # combinacao como conhecida sem definir default nenhum.
                         defaults[key] = frame['payload']
                         if log is not None:
-                            log_default(log, now, frame)
+                            log_default(log, now, frame, direcao)
                         if xlsx is not None:
-                            xlsx.add(now, 'DEFAULT', frame)
+                            xlsx.add(now, 'DEFAULT', frame, direcao)
                     elif status == 'changed':
                         if frame['payload'] == default_payload:
                             if log is not None:
-                                log_return(log, now, frame)
+                                log_return(log, now, frame, direcao)
                             if xlsx is not None:
-                                xlsx.add(now, 'VOLTOU', frame)
+                                xlsx.add(now, 'VOLTOU', frame, direcao)
                         else:
                             if log is not None:
-                                log_change(log, now, frame, default_payload)
+                                log_change(log, now, frame, default_payload, direcao)
                             if xlsx is not None:
-                                xlsx.add(now, 'MUDOU', frame, default_payload)
+                                xlsx.add(now, 'MUDOU', frame, direcao, default_payload)
             else:
                 frame = {
                     'raw': bytes(buffer), 'slave_id': None,
                     'function_code': None, 'payload': b'', 'crc_ok': False,
                 }
-                events.appendleft((now, None, frame))
+                events.appendleft((now, None, frame, None))
             buffer = bytearray()
             last_byte_time = None
 
@@ -368,22 +413,24 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
 HELP_LINES = [
     "AJUDA - RS-485 Monitor    (aperte H, ? ou Q para voltar)",
     "",
-    "TECLAS",
-    "  Q       sai do monitor",
-    "  X       liga/desliga a gravacao dos eventos em eventos.xlsx",
-    "  H ou ?  mostra/esconde esta ajuda",
+    "TECLAS: Q sai | X liga/desliga eventos.xlsx | H ou ? esta ajuda",
     "",
     "COMO LER A TELA",
-    "  DISPOSITIVOS CONHECIDOS  combinacoes (escravo+funcao) ja vistas,",
-    "                           com ultimo valor, quantas vezes e ha quanto",
+    "  DISPOSITIVOS CONHECIDOS  combinacoes (escravo+funcao+direcao) ja",
+    "                           vistas, ultimo valor, qtd e ha quanto tempo",
+    "  DIR  REQ = pedido do mestre, RESP = resposta do escravo (mesmo",
+    "       escravo+funcao dos dois lados; a coluna separa as duas)",
     "  *** NOVO ***             combinacao nunca vista antes",
     "  >>> MUDOU <<<            valor diferente do que ja era conhecido",
     "  EVENTOS RECENTES         historico detalhado (payload em hex)",
     "",
-    "SOBRE O EXCEL (tecla X)",
-    "  O .xlsx fica salvo na BeagleBone. Para abrir no Excel de verdade,",
-    "  copie para o computador: scripts/baixar_eventos.bat (Windows), ou",
-    "  scp. Passo a passo completo: GUIA_DE_USO.md no repositorio.",
+    "REQ/RESP e decidido por alternancia (1o quadro de cada combinacao e",
+    "sempre REQ, o proximo RESP, e segue assim) -- pode inverter se algum",
+    "quadro se perder por ruido, mas normalmente se autocorrige sozinho.",
+    "",
+    "Excel: arquivo fica na BeagleBone. Para trazer pro computador use",
+    "scripts/baixar_eventos.bat (Windows), ou scp. Guia completo:",
+    "GUIA_DE_USO.md no repositorio.",
     "",
     "(H, ? ou Q para voltar)",
 ]
@@ -410,7 +457,7 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
                 (attr_new if xlsx_status.startswith("ON") else 0))
     safe_addstr(stdscr, 2, 0, "-" * (w - 1))
     safe_addstr(stdscr, 3, 0, "DISPOSITIVOS CONHECIDOS", attr_header)
-    header = "%-6s %-28s %-24s %5s  %-6s" % ("SLAVE", "FUNCAO", "PAYLOAD", "QTD", "HA")
+    header = "%-6s %-5s %-28s %-24s %5s  %-6s" % ("SLAVE", "DIR", "FUNCAO", "PAYLOAD", "QTD", "HA")
     safe_addstr(stdscr, 4, 0, header, curses.A_UNDERLINE)
 
     max_device_rows = max(3, (h - 9) // 2)
@@ -422,7 +469,7 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
         entry = registry.get(key)
         if entry is None:
             continue
-        slave_id, function_code = key
+        slave_id, function_code, direcao = key
         attr = 0
         tag = ""
         if entry['status'] and now < entry['status_until']:
@@ -434,8 +481,8 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
                 tag = " >>> MUDOU <<<"
         if not entry['crc_ok']:
             attr = attr_bad_crc
-        line = "%-6d %-28s %-24s %5d  %-6s%s" % (
-            slave_id, function_name(function_code), hexlify_spaced(entry['payload']),
+        line = "%-6d %-5s %-28s %-24s %5d  %-6s%s" % (
+            slave_id, direcao, function_name(function_code), hexlify_spaced(entry['payload']),
             entry['count'], fmt_ago(now - entry['last_seen']), tag)
         safe_addstr(stdscr, row, 0, line, attr)
         row += 1
@@ -447,7 +494,7 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
 
     event_row = sep_row + 2
     for item in events:
-        ts, status, frame = item
+        ts, status, frame, direcao = item
         if event_row >= h - 1:
             break
         when = time.strftime("%H:%M:%S", time.localtime(ts))
@@ -467,8 +514,8 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
                 tag = "....  "
             if not frame['crc_ok']:
                 attr = attr_bad_crc
-            text = "%s %sSlave=%d FC=0x%02X (%s) Payload=%s CRC=%s" % (
-                when, tag, frame['slave_id'], frame['function_code'],
+            text = "%s %s%-4s Slave=%d FC=0x%02X (%s) Payload=%s CRC=%s" % (
+                when, tag, direcao, frame['slave_id'], frame['function_code'],
                 function_name(frame['function_code']), hexlify_spaced(frame['payload']), crc_txt)
         safe_addstr(stdscr, event_row, 0, text, attr)
         event_row += 1

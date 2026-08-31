@@ -27,7 +27,7 @@ RS-485 Monitor - /dev/ttyUSB0 @ 9600 bps  (Q sai, X Excel, H ajuda)
 Excel: OFF eventos.xlsx
 --------------------------------------------------------------------
 DISPOSITIVOS CONHECIDOS
-SLAVE  FUNCAO                       PAYLOAD                    QTD  HA
+SLAVE  DIR   FUNCAO                       PAYLOAD                    QTD  HA
 ...
 --------------------------------------------------------------------
 EVENTOS RECENTES
@@ -44,11 +44,18 @@ monitor.
 ## 3. Ler a tela
 
 - **DISPOSITIVOS CONHECIDOS**: cada linha é uma combinação
-  (endereço do escravo + função Modbus) que já apareceu no barramento,
-  com o último valor visto, quantas vezes apareceu e há quanto tempo.
+  (endereço do escravo + direção + função Modbus) que já apareceu no
+  barramento, com o último valor visto, quantas vezes apareceu e há
+  quanto tempo.
+- **Coluna DIR**: `REQ` = pedido do mestre, `RESP` = resposta do
+  escravo. Pedido e resposta usam o mesmo endereço/função (é assim que
+  o Modbus funciona), então aparecem como duas linhas separadas em vez
+  de uma sobrescrever a outra.
 - **`*** NOVO ***`**: combinação nunca vista antes.
 - **`>>> MUDOU <<<`**: apareceu um valor diferente do que já era
-  conhecido — por exemplo, uma chave ou sensor mudou de estado.
+  conhecido — por exemplo, uma chave ou sensor mudou de estado (isso
+  compara só dentro da mesma direção, então não dispara só por REQ e
+  RESP alternarem naturalmente).
 - **EVENTOS RECENTES**: histórico dos últimos quadros vistos, mais
   detalhado (payload em hex, se o CRC bateu ou não).
 
