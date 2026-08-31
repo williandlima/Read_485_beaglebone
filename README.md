@@ -233,6 +233,31 @@ alternância pode ficar invertida até se autocorrigir (o que costuma
 acontecer sozinho no próximo ciclo pergunta→resposta). Também assume
 um único mestre no barramento — o cenário normal do Modbus RTU.
 
+### Quadros corrompidos e colisões
+
+Todo quadro com CRC inválido é sempre mostrado em destaque (vermelho),
+tanto na tabela quanto em EVENTOS RECENTES, com `CRC INVALIDO` — nunca
+passa em silêncio, seja ruído na linha ou um bit invertido de propósito
+num teste (validado testando as 64 combinações possíveis de inversão
+de 1 bit num quadro real: as 64 foram corretamente detectadas).
+
+Se o buffer acumular mais de 256 bytes (o maior ADU da especificação
+Modbus RTU) sem nenhum silêncio entre quadros, é cortado e mostrado
+como `ESTOURO` em vez de esperar indefinidamente por um silêncio que
+pode não vir — sinal de colisão real (dois transmissores falando ao
+mesmo tempo) ou de bytes residuais ainda escoando do buffer da porta.
+
+Isso também explica um comportamento comum logo ao abrir o monitor: o
+pyserial já limpa o buffer de entrada no `open()`, mas num conversor
+USB (não é UART nativa) o chip (ex.: FTDI) tem buffer interno próprio
+que pode entregar, alguns ms depois da porta abrir, bytes que já
+estavam em trânsito desde antes — sobretudo se algo já estava
+transmitindo continuamente havia um tempo. `main()` faz uma segunda
+limpeza (`reset_input_buffer()`) depois de um instante para cobrir essa
+janela, mas um `ESTOURO` isolado nos primeiros segundos é esperado e
+normal; se acontecer repetidamente durante o uso normal, é sinal de
+problema físico real no barramento.
+
 Escrito em sintaxe compativel com Python 3.4+ (sem f-strings, sem
 dataclasses) porque BeagleBones com imagens antigas (Debian Jessie,
 Python 3.4) nao rodam o codigo em `src/`. So depende de `pyserial` e do

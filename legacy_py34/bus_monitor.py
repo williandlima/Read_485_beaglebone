@@ -27,6 +27,16 @@ tabela mostre MUDOU a cada ciclo so por alternar entre os dois (que
 quase sempre tem payloads diferentes por natureza, nao por o valor
 real ter mudado).
 
+Todo quadro com CRC invalido (corrompido por ruido, colisao entre dois
+transmissores, ou bit invertido de proposito para teste) e mostrado em
+destaque (vermelho) tanto na tabela quanto nos eventos recentes, com
+"CRC INVALIDO" -- nada com CRC errado passa em silencio. Se o buffer
+acumular mais de MAX_FRAME_BYTES (256, o maior ADU da especificacao
+Modbus RTU) sem um silencio entre quadros -- sinal de colisao real ou
+de residuo de bytes antigos ainda escoando do buffer da porta -- e
+cortado e mostrado como "ESTOURO", em vez de esperar indefinidamente
+por um silencio que pode nao vir.
+
 Uso:
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600
     python3 bus_monitor.py /dev/ttyUSB0 --baudrate 9600 --log eventos.log
@@ -88,6 +98,16 @@ FUNCTION_NAMES = {
 NEW_HIGHLIGHT_SECONDS = 6.0
 CHANGED_HIGHLIGHT_SECONDS = 6.0
 MAX_EVENTS = 300
+
+# Maior ADU (Application Data Unit) permitido pela especificacao Modbus
+# RTU. Serve de teto de seguranca para o buffer que acumula bytes ate o
+# silencio entre quadros: sem isso, uma colisao (dois transmissores no
+# barramento ao mesmo tempo) ou um residuo de bytes antigos no buffer da
+# porta faria o buffer crescer indefinidamente esperando um silencio que
+# pode demorar a aparecer, e o resultado viraria "um quadro so" gigante
+# e sem sentido, tratado igual a qualquer outro CRC invalido -- sem
+# indicar que era, na verdade, estouro/colisao.
+MAX_FRAME_BYTES = 256
 
 
 def crc16_modbus(data):
@@ -363,6 +383,22 @@ def run(stdscr, ser, silence, port_desc, log=None, xlsx=None):
         if chunk:
             buffer.extend(chunk)
             last_byte_time = now
+            if len(buffer) > MAX_FRAME_BYTES:
+                # Nunca deveria acontecer com um quadro Modbus RTU legitimo
+                # (o maior ADU da especificacao e 256 bytes) -- ou e uma
+                # colisao (dois transmissores ao mesmo tempo embaralhando
+                # bytes na linha), ou e um residuo de bytes antigos ainda
+                # escoando do buffer da porta. Corta aqui em vez de esperar
+                # um silencio que pode nunca vir enquanto a linha ficar
+                # ocupada, e marca como estouro em vez de misturar com um
+                # CRC invalido comum.
+                frame = {
+                    'raw': bytes(buffer), 'slave_id': None,
+                    'function_code': None, 'payload': b'', 'crc_ok': False,
+                }
+                events.appendleft((now, 'overflow', frame, None))
+                buffer = bytearray()
+                last_byte_time = None
         elif buffer and last_byte_time is not None and (now - last_byte_time) >= silence:
             frame = parse_frame(bytes(buffer))
             if frame is not None:
@@ -418,11 +454,11 @@ HELP_LINES = [
     "COMO LER A TELA",
     "  DISPOSITIVOS CONHECIDOS  combinacoes (escravo+funcao+direcao) ja",
     "                           vistas, ultimo valor, qtd e ha quanto tempo",
-    "  DIR  REQ = pedido do mestre, RESP = resposta do escravo (mesmo",
-    "       escravo+funcao dos dois lados; a coluna separa as duas)",
+    "  DIR  REQ=pedido do mestre, RESP=resposta (mesmo escravo+funcao)",
     "  *** NOVO ***             combinacao nunca vista antes",
     "  >>> MUDOU <<<            valor diferente do que ja era conhecido",
     "  EVENTOS RECENTES         historico detalhado (payload em hex)",
+    "  CRC INVALIDO / ESTOURO   quadro corrompido ou colisao no barramento",
     "",
     "REQ/RESP e decidido por alternancia (1o quadro de cada combinacao e",
     "sempre REQ, o proximo RESP, e segue assim) -- pode inverter se algum",
@@ -498,7 +534,11 @@ def draw(stdscr, registry, registry_order, events, now, port_desc, xlsx_status,
         if event_row >= h - 1:
             break
         when = time.strftime("%H:%M:%S", time.localtime(ts))
-        if frame.get('slave_id') is None:
+        if status == 'overflow':
+            text = "%s ESTOURO (%d bytes sem silencio -- possivel colisao/residuo) raw=%s" % (
+                when, len(frame['raw']), hexlify_spaced(frame['raw']))
+            attr = attr_bad_crc
+        elif frame.get('slave_id') is None:
             text = "%s BLOCO CURTO raw=%s" % (when, hexlify_spaced(frame['raw']))
             attr = 0
         else:
@@ -548,6 +588,18 @@ def main():
     except OPEN_ERRORS as exc:
         report_open_error(sys.stderr.write, args.port, exc)
         return 1
+
+    # O pyserial ja limpa o buffer de entrada no open() -- mas num
+    # conversor USB (nao UART nativa), o chip (ex.: FTDI) tem buffer
+    # interno proprio que pode entregar, alguns ms DEPOIS da porta abrir,
+    # bytes que ja estavam em transito desde antes de comecarmos a
+    # escutar (sobretudo se algo ja estava transmitindo continuamente no
+    # barramento havia um tempo). Sem isso, os primeiros quadros podem
+    # sair grudados/corrompidos ate esse residuo escoar. Uma segunda
+    # limpeza, depois de um instante, cobre essa janela.
+    time.sleep(0.2)
+    ser.reset_input_buffer()
+
     port_desc = "%s @ %s bps" % (args.port, args.baudrate)
 
     log = open_log(args.log) if args.log else None

@@ -58,6 +58,15 @@ monitor.
   RESP alternarem naturalmente).
 - **EVENTOS RECENTES**: histórico dos últimos quadros vistos, mais
   detalhado (payload em hex, se o CRC bateu ou não).
+- **`CRC INVALIDO`** (em vermelho): quadro corrompido — ruído na linha,
+  ou um bit invertido de propósito num teste. Sempre é mostrado, nunca
+  passa em silêncio.
+- **`ESTOURO`** (em vermelho): mais de 256 bytes chegaram sem nenhum
+  silêncio entre eles — sinal de colisão real (dois transmissores
+  falando ao mesmo tempo) ou de bytes antigos ainda escoando do buffer
+  da porta logo no início. Normal aparecer uma vez só, nos primeiros
+  segundos depois de abrir o monitor; se aparecer repetidamente durante
+  o uso normal, é sinal de problema físico no barramento.
 
 Deixe a tela aberta e observe o equipamento sendo operado — os
 destaques aparecem em tempo real conforme o comando muda no barramento.
